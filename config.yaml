@@ -1,0 +1,110 @@
+# Dear Future Application Configuration
+# YAML configuration with environment variable override support
+
+# Application Environment
+environment: development
+debug: true
+log_level: info
+
+# Server Configuration
+server:
+  port: "8080"
+  read_timeout: "15s"
+  write_timeout: "15s"
+  idle_timeout: "60s"
+
+# Database Configuration
+database:
+  url: ""  # Set via DATABASE_URL environment variable
+  max_conns: 25
+  max_idle_conns: 5
+  conn_lifetime: "5m"
+
+# Authentication
+auth:
+  jwt_secret: "your-secret-key-change-in-production"
+  jwt_expiration: "15m"
+  refresh_token_lifetime: "168h"  # 7 days
+  password_min_length: 8
+
+# AWS Configuration
+aws:
+  region: "us-east-1"
+  s3_bucket: ""  # Set via S3_BUCKET environment variable
+  s3_bucket_region: "us-east-1"
+  ses_region: "us-east-1"
+  ses_from_email: "noreply@dearfuture.app"
+  ses_from_name: "Dear Future"
+
+# Supabase Configuration
+supabase:
+  url: ""  # Set via SUPABASE_URL environment variable
+  anon_key: ""  # Set via SUPABASE_ANON_KEY environment variable
+  service_key: ""  # Set via SUPABASE_SERVICE_KEY environment variable
+
+# File Upload Limits
+file_upload:
+  max_file_size: 52428800  # 50MB in bytes
+  max_attachments: 10
+  allowed_file_types:
+    - "image/jpeg"
+    - "image/png"
+    - "application/pdf"
+    - "text/plain"
+
+# Message Limits
+message:
+  max_message_length: 10000
+  max_title_length: 200
+  quota_per_user: 100
+
+# Email Configuration
+email:
+  templates_path: "./templates"
+  rate_limit: 100
+
+# Scheduling Configuration
+scheduling:
+  interval: "1m"
+  max_retry_attempts: 5
+  retry_backoff_multiplier: 2.0
+
+# Cache Configuration
+cache:
+  enabled: false
+  url: ""  # Set via CACHE_URL environment variable
+  ttl: "10m"
+  key_prefix: "dear-future:"
+
+# Security Configuration
+security:
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  trusted_proxies: []
+  rate_limit_per_minute: 60
+  enable_https: false
+  cert_file: ""
+  key_file: ""
+
+# Monitoring Configuration
+monitoring:
+  metrics_enabled: true
+  metrics_port: "9090"
+  health_check_url: "/health"
+
+# Feature Flags
+features:
+  push_notifications: false
+  webhooks: false
+  message_templates: false
+  batch_processing: true
+  advanced_scheduling: false
+  file_attachments: false  # Disabled by default for development
+  email_reminders: false
+  analytics: false
+
+# Deployment Configuration
+deployment:
+  platform_name: "development"
+  container: false

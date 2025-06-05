@@ -1,0 +1,114 @@
+# Dear Future Staging Configuration
+# Environment variables will override these values
+
+environment: staging
+debug: true
+log_level: info
+
+# Server Configuration
+server:
+  port: "8080"
+  read_timeout: "20s"
+  write_timeout: "20s"
+  idle_timeout: "90s"
+
+# Database Configuration
+database:
+  url: ""  # Set via DATABASE_URL
+  max_conns: 30
+  max_idle_conns: 8
+  conn_lifetime: "8m"
+
+# Authentication
+auth:
+  jwt_secret: ""  # Set via JWT_SECRET
+  jwt_expiration: "30m"  # Longer for testing
+  refresh_token_lifetime: "168h"
+  password_min_length: 8
+
+# AWS Configuration
+aws:
+  region: "us-east-1"
+  s3_bucket: ""  # Set via S3_BUCKET (staging bucket)
+  s3_bucket_region: "us-east-1"
+  ses_region: "us-east-1"
+  ses_from_email: "staging@dearfuture.app"
+  ses_from_name: "Dear Future Staging"
+
+# Supabase Configuration
+supabase:
+  url: ""  # Set via SUPABASE_URL (staging instance)
+  anon_key: ""  # Set via SUPABASE_ANON_KEY
+  service_key: ""  # Set via SUPABASE_SERVICE_KEY
+
+# File Upload Limits
+file_upload:
+  max_file_size: 52428800  # 50MB
+  max_attachments: 15
+  allowed_file_types:
+    - "image/jpeg"
+    - "image/png"
+    - "image/gif"
+    - "application/pdf"
+    - "text/plain"
+    - "text/markdown"
+
+# Message Limits
+message:
+  max_message_length: 25000
+  max_title_length: 300
+  quota_per_user: 500
+
+# Email Configuration
+email:
+  templates_path: "./templates"
+  rate_limit: 500
+
+# Scheduling Configuration
+scheduling:
+  interval: "1m"
+  max_retry_attempts: 8
+  retry_backoff_multiplier: 1.8
+
+# Cache Configuration
+cache:
+  enabled: true
+  url: ""  # Set via CACHE_URL
+  ttl: "30m"
+  key_prefix: "dear-future:staging:"
+
+# Security Configuration
+security:
+  cors_origins:
+    - "https://staging.dearfuture.app"
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  trusted_proxies:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+  rate_limit_per_minute: 100
+  enable_https: true
+  cert_file: ""
+  key_file: ""
+
+# Monitoring Configuration
+monitoring:
+  metrics_enabled: true
+  metrics_port: "9090"
+  health_check_url: "/health"
+
+# Feature Flags - enable most features for testing
+features:
+  push_notifications: true
+  webhooks: true
+  message_templates: true
+  batch_processing: true
+  advanced_scheduling: true
+  file_attachments: true
+  email_reminders: true
+  analytics: false  # Disabled in staging
+
+# Deployment Configuration
+deployment:
+  platform_name: "staging"
+  container: true
