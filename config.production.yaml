@@ -1,0 +1,118 @@
+# Dear Future Production Configuration
+# Environment variables will override these values
+
+environment: production
+debug: false
+log_level: warn
+
+# Server Configuration
+server:
+  port: "8080"
+  read_timeout: "30s"
+  write_timeout: "30s"
+  idle_timeout: "120s"
+
+# Database Configuration - use environment variables
+database:
+  url: ""  # Set via DATABASE_URL
+  max_conns: 50
+  max_idle_conns: 10
+  conn_lifetime: "10m"
+
+# Authentication - must be set via environment
+auth:
+  jwt_secret: ""  # Must be set via JWT_SECRET
+  jwt_expiration: "15m"
+  refresh_token_lifetime: "168h"
+  password_min_length: 12  # Stricter in production
+
+# AWS Configuration - use environment variables
+aws:
+  region: "us-east-1"
+  s3_bucket: ""  # Set via S3_BUCKET
+  s3_bucket_region: "us-east-1"
+  ses_region: "us-east-1"
+  ses_from_email: "noreply@dearfuture.app"
+  ses_from_name: "Dear Future"
+
+# Supabase Configuration - use environment variables
+supabase:
+  url: ""  # Set via SUPABASE_URL
+  anon_key: ""  # Set via SUPABASE_ANON_KEY
+  service_key: ""  # Set via SUPABASE_SERVICE_KEY
+
+# File Upload Limits
+file_upload:
+  max_file_size: 104857600  # 100MB in production
+  max_attachments: 20
+  allowed_file_types:
+    - "image/jpeg"
+    - "image/png"
+    - "image/gif"
+    - "image/webp"
+    - "application/pdf"
+    - "text/plain"
+    - "text/markdown"
+    - "application/msword"
+    - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+# Message Limits
+message:
+  max_message_length: 50000  # Larger in production
+  max_title_length: 500
+  quota_per_user: 1000
+
+# Email Configuration
+email:
+  templates_path: "/app/templates"
+  rate_limit: 1000
+
+# Scheduling Configuration
+scheduling:
+  interval: "30s"  # More frequent in production
+  max_retry_attempts: 10
+  retry_backoff_multiplier: 1.5
+
+# Cache Configuration
+cache:
+  enabled: true
+  url: ""  # Set via CACHE_URL
+  ttl: "1h"
+  key_prefix: "dear-future:prod:"
+
+# Security Configuration
+security:
+  cors_origins:
+    - "https://dearfuture.app"
+    - "https://www.dearfuture.app"
+    - "https://app.dearfuture.app"
+  trusted_proxies: 
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+  rate_limit_per_minute: 120
+  enable_https: true
+  cert_file: "/etc/ssl/certs/cert.pem"
+  key_file: "/etc/ssl/private/key.pem"
+
+# Monitoring Configuration
+monitoring:
+  metrics_enabled: true
+  metrics_port: "9090"
+  health_check_url: "/health"
+
+# Feature Flags
+features:
+  push_notifications: true
+  webhooks: true
+  message_templates: true
+  batch_processing: true
+  advanced_scheduling: true
+  file_attachments: true
+  email_reminders: true
+  analytics: true
+
+# Deployment Configuration
+deployment:
+  platform_name: "production"
+  container: true
