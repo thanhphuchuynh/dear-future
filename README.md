@@ -34,10 +34,10 @@ Dear Future allows users to schedule messages to be delivered to themselves at f
 
 ### Backend (Implemented)
 - **Language**: Go 1.21+ with functional programming patterns
-- **Database**: PostgreSQL via Supabase
-- **Storage**: AWS S3 for file attachments
-- **Email**: AWS SES for message delivery
-- **Authentication**: Supabase Auth
+- **Database**: PostgreSQL (local via Docker) + Supabase (production)
+- **Storage**: Cloudflare R2 (S3-compatible, zero egress fees)
+- **Email**: Gmail SMTP (free for 500 emails/day) or SendGrid
+- **Authentication**: Supabase Auth (planned)
 - **Deployment**: AWS Lambda → ECS → AKS
 
 ### Frontend (Planned)
@@ -88,9 +88,133 @@ dear-future/
 
 ### Prerequisites
 - Go 1.21 or higher
+- Docker and Docker Compose (for local database)
 - Node.js 18+ (for frontend, when implemented)
 - AWS CLI configured (for deployment)
-- Supabase account (for database)
+- Supabase account (for production database)
+
+### Local Development Setup
+
+For local development, you can use PostgreSQL running in Docker instead of Supabase:
+
+1. **Start the local PostgreSQL database**
+```bash
+docker-compose up -d
+```
+
+This will start:
+- PostgreSQL 16 on port 5432
+- Adminer (database UI) on port 8081 (optional, access at http://localhost:8081)
+
+2. **Copy the local environment configuration**
+```bash
+cp .env.local .env
+```
+
+The local configuration uses:
+- Database: `postgresql://postgres:postgres@localhost:5432/dear_future_dev?sslmode=disable`
+- Mock services for AWS S3 and SES (no AWS account needed)
+- Debug mode enabled
+
+3. **Apply database migrations**
+
+The migrations will be automatically applied when the database starts for the first time. You can also manually apply them:
+
+```bash
+docker exec -i dear-future-postgres psql -U postgres -d dear_future_dev < migrations/001_init_schema.sql
+```
+
+4. **Access the database**
+
+Using Adminer (web UI):
+- URL: http://localhost:8081
+- System: PostgreSQL
+- Server: postgres
+- Username: postgres
+- Password: postgres
+- Database: dear_future_dev
+
+Or using psql directly:
+```bash
+docker exec -it dear-future-postgres psql -U postgres -d dear_future_dev
+```
+
+5. **Stop the local database**
+```bash
+docker-compose down
+```
+
+To remove all data and start fresh:
+```bash
+docker-compose down -v
+```
+
+### Running with Hot Reload (Full Stack)
+
+Now you can run both backend and frontend with hot reload enabled:
+
+**Option 1: Run everything together (Recommended)**
+```bash
+make dev
+```
+
+This single command will:
+- Start PostgreSQL and Adminer
+- Start the Go backend with auto-reload
+- Start the Next.js frontend with hot reload (Turbopack)
+- Configure API proxying automatically
+
+Access:
+- Frontend: http://localhost:3000 (with hot reload)
+- Backend API: http://localhost:8080
+- Adminer: http://localhost:8081
+
+Press `Ctrl+C` to stop all services.
+
+**Option 2: Run services separately**
+
+In separate terminal windows:
+
+```bash
+# Terminal 1: Start database
+make db-start
+
+# Terminal 2: Start backend
+make dev-backend
+
+# Terminal 3: Start UI with hot reload
+make dev-ui
+```
+
+**Option 3: Manual control**
+
+```bash
+# Database
+docker-compose up -d postgres adminer
+
+# Backend
+go run main.go
+
+# UI (in the ui/ directory)
+cd ui && npm run dev
+```
+
+### Hot Reload Features
+
+- **Frontend (Next.js)**: Uses Turbopack for instant hot module replacement (HMR)
+- **Backend (Go)**: Restart `go run main.go` when you make changes, or use a tool like `air` for auto-reload
+- **Database**: Changes persist in Docker volume, survives restarts
+
+### API Proxy Configuration
+
+The UI is configured to proxy API requests to the backend automatically:
+- Requests to `http://localhost:3000/api/*` are forwarded to `http://localhost:8080/api/*`
+- This avoids CORS issues during development
+- Configuration is in [ui/next.config.ts](ui/next.config.ts)
+
+### Production Setup (Supabase)
+
+For production deployment, use Supabase instead of local PostgreSQL:
 
 ### Environment Setup
 
@@ -124,9 +248,20 @@ SUPABASE_SERVICE_KEY=your-service-key
 
 ### Running the Application
 
-**Development mode:**
+**Development mode with hot reload (full stack):**
 ```bash
-go run main.go
+make dev
+```
+This starts PostgreSQL, backend, and frontend with hot reload enabled.
+
+**Run backend only:**
+```bash
+make dev-backend
+```
+
+**Run UI only (with hot reload):**
+```bash
+make dev-ui
 ```
 
 **Run tests:**
@@ -218,6 +353,8 @@ kubectl apply -f deployments/k8s/
 ## 📚 Documentation
 
 - **[Architecture Guide](docs/architecture.md)** - Complete system design
+- **[Infrastructure Setup](docs/infrastructure-setup.md)** - PostgreSQL, R2, and SMTP configuration
+- **[API Implementation](docs/api-implementation.md)** - REST API endpoints and authentication
 - **[Functional Programming Guide](docs/functional-programming-guide.md)** - FP patterns and practices
 - **[Deployment Guide](docs/deployment-guide.md)** - Multi-platform deployment strategies
 - **[Project Structure](docs/project-structure.md)** - Monorepo organization
@@ -232,12 +369,15 @@ kubectl apply -f deployments/k8s/
 - [x] Dependency injection
 - [x] Comprehensive tests
 
-### Phase 2: Infrastructure (Next)
-- [ ] Supabase database adapters
-- [ ] AWS S3 storage implementation
-- [ ] AWS SES email service
-- [ ] Authentication middleware
-- [ ] API handlers
+### Phase 2: Infrastructure & API ✅ COMPLETE
+- [x] PostgreSQL database adapter
+- [x] Cloudflare R2 storage implementation (S3-compatible)
+- [x] Gmail SMTP email service
+- [x] JWT authentication system
+- [x] Authentication & security middleware
+- [x] User API handlers (register, login, profile)
+- [x] Message API handlers (CRUD operations)
+- [x] Complete REST API with 12 endpoints
 
 ### Phase 3: Frontend Development
 - [ ] React TypeScript application

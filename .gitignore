@@ -49,3 +49,34 @@ Thumbs.db
 *.wmv
 
 vendor
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+dear-future
+
+# Go test coverage
+*.out
+coverage.html
+
+# Docker volumes
+postgres_data/
+
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# UI specific
+ui/.env.local
+ui/.env.*.local
+ui/node_modules/

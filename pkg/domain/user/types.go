@@ -32,6 +32,7 @@ type CreateUserRequest struct {
 	Email    string
 	Name     string
 	Timezone string
+	UserID   uuid.UUID
 }
 
 // UpdateUserRequest contains data for updating user information
@@ -58,7 +59,7 @@ func NewUser(req CreateUserRequest) common.Result[User] {
 	// Create the user
 	now := time.Now()
 	user := User{
-		id:        uuid.New(),
+		id:        validReq.Value().UserID,
 		email:     validReq.Value().Email,
 		name:      validReq.Value().Name,
 		timezone:  validReq.Value().Timezone,

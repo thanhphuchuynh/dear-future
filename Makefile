@@ -1,7 +1,7 @@
 # Dear Future - Makefile for building and running the application
 # Built with functional programming principles in Go
 
-.PHONY: help build run test clean cli server docker deploy-lambda
+.PHONY: help build run test clean cli server docker deploy-lambda dev dev-backend dev-ui db-start db-stop db-reset
 
 # Default target
 help: ## Show this help message
@@ -143,9 +143,46 @@ tidy: ## Tidy dependencies
 	@go mod tidy
 
 # Development targets
+dev: ## Start full dev environment (DB + Backend + UI with hot reload)
+	@./scripts/dev.sh
+
+dev-backend: ## Start only backend (assumes DB is running)
+	@echo "🚀 Starting Backend..."
+	@go run main.go
+
+dev-ui: ## Start only UI (assumes backend is running)
+	@echo "🚀 Starting Frontend..."
+	@cd ui && npm run dev
+
+db-start: ## Start PostgreSQL and Adminer
+	@echo "📦 Starting PostgreSQL and Adminer..."
+	@docker-compose up -d postgres adminer
+	@echo "⏳ Waiting for PostgreSQL to be ready..."
+	@until docker exec dear-future-postgres pg_isready -U postgres > /dev/null 2>&1; do sleep 1; done
+	@echo "✅ PostgreSQL is ready!"
+	@echo ""
+	@echo "Services:"
+	@echo "  PostgreSQL: localhost:5432"
+	@echo "  Adminer:    http://localhost:8081"
+
+db-stop: ## Stop all Docker services
+	@echo "⏹️  Stopping Docker services..."
+	@docker-compose down
+
+db-reset: ## Reset database (remove all data)
+	@echo "🗑️  Resetting database..."
+	@docker-compose down -v
+	@docker-compose up -d postgres adminer
+	@echo "⏳ Waiting for PostgreSQL to be ready..."
+	@until docker exec dear-future-postgres pg_isready -U postgres > /dev/null 2>&1; do sleep 1; done
+	@echo "✅ Database reset complete!"
+
 dev-setup: ## Set up development environment
 	@echo "🛠️  Setting up development environment..."
 	@go mod download
+	@go mod vendor
+	@if [ ! -f .env ]; then cp .env.local .env; fi
+	@cd ui && npm install
 	@echo "✅ Development environment ready!"
 
 dev-deps: ## Install development dependencies

@@ -10,6 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+	"github.com/thanhphuchuynh/dear-future/pkg/adapters/database"
+	"github.com/thanhphuchuynh/dear-future/pkg/adapters/email"
+	"github.com/thanhphuchuynh/dear-future/pkg/adapters/storage"
 	"github.com/thanhphuchuynh/dear-future/pkg/composition"
 	"github.com/thanhphuchuynh/dear-future/pkg/config"
 	"github.com/thanhphuchuynh/dear-future/pkg/domain/common"
@@ -18,6 +22,9 @@ import (
 )
 
 func main() {
+	// Load .env file if it exists (ignore error if file doesn't exist)
+	_ = godotenv.Load()
+
 	// Load configuration (check for CONFIG_FILE environment variable)
 	configFile := os.Getenv("CONFIG_FILE")
 	if configFile == "" {
@@ -101,14 +108,92 @@ func initializeApplication(ctx context.Context, cfg *config.Config) common.Resul
 	return createProductionApp(ctx, appConfig)
 }
 
-// createDevelopmentApp creates an app with mock services for development
+// createDevelopmentApp creates an app with real services for development
 func createDevelopmentApp(ctx context.Context, appConfig composition.AppConfig) common.Result[*composition.App] {
-	log.Println("🧪 Initializing development environment with mock services...")
+	log.Println("🧪 Initializing development environment...")
 
-	appConfig.Database = mocks.NewMockDatabase()
+	cfg := appConfig.Config
+
+	// Initialize Database (PostgreSQL) - same as production
+	if cfg.Database.URL != "" {
+		log.Println("📊 Connecting to PostgreSQL database...")
+		dbConfig := database.PostgresConfig{
+			DatabaseURL:  cfg.Database.URL,
+			MaxConns:     cfg.Database.MaxConns,
+			MaxIdleConns: cfg.Database.MaxIdleConns,
+			ConnLifetime: cfg.DatabaseConnLifetime,
+		}
+
+		db, err := database.NewSimplePostgresDB(dbConfig)
+		if err != nil {
+			log.Printf("❌ Failed to initialize database: %v", err)
+			log.Println("⚠️  Falling back to mock database")
+			appConfig.Database = mocks.NewMockDatabase()
+		} else {
+			log.Println("✅ PostgreSQL database connected")
+			appConfig.Database = db
+		}
+	} else {
+		log.Println("⚠️  No database URL configured, using mock database")
+		appConfig.Database = mocks.NewMockDatabase()
+	}
+
+	// Initialize Email Service (SMTP) - optional in dev
+	if cfg.SMTP.Host != "" && cfg.SMTP.Username != "" {
+		log.Printf("📧 Configuring SMTP email service (%s)...", cfg.SMTP.Host)
+		emailConfig := email.SMTPConfig{
+			Host:          cfg.SMTP.Host,
+			Port:          cfg.SMTP.Port,
+			Username:      cfg.SMTP.Username,
+			Password:      cfg.SMTP.Password,
+			FromEmail:     cfg.SMTP.FromEmail,
+			FromName:      cfg.SMTP.FromName,
+			UseTLS:        cfg.SMTP.UseTLS,
+			SkipTLSVerify: cfg.SMTP.SkipTLSVerify,
+		}
+
+		emailService, err := email.NewSMTPEmailService(emailConfig)
+		if err != nil {
+			log.Printf("❌ Failed to initialize SMTP email service: %v", err)
+			log.Println("⚠️  Using mock email service")
+			appConfig.Email = mocks.NewMockEmailService()
+		} else {
+			log.Println("✅ SMTP email service configured")
+			appConfig.Email = emailService
+		}
+	} else {
+		log.Println("⚠️  No SMTP configuration, using mock email service")
+		appConfig.Email = mocks.NewMockEmailService()
+	}
+
+	// Initialize Storage Service (R2) - optional in dev
+	if cfg.R2Storage.AccountID != "" && cfg.R2Storage.BucketName != "" {
+		log.Println("☁️  Configuring Cloudflare R2 storage...")
+		storageConfig := storage.R2StorageConfig{
+			AccountID:       cfg.R2Storage.AccountID,
+			AccessKeyID:     cfg.R2Storage.AccessKeyID,
+			SecretAccessKey: cfg.R2Storage.SecretAccessKey,
+			BucketName:      cfg.R2Storage.BucketName,
+			PublicURL:       cfg.R2Storage.PublicURL,
+		}
+
+		r2Storage, err := storage.NewR2Storage(storageConfig)
+		if err != nil {
+			log.Printf("❌ Failed to initialize R2 storage: %v", err)
+			log.Println("⚠️  Using mock storage service")
+			appConfig.Storage = mocks.NewMockStorageService()
+		} else {
+			log.Println("✅ R2 storage configured")
+			appConfig.Storage = r2Storage
+		}
+	} else {
+		log.Println("⚠️  No R2 configuration, using mock storage service")
+		appConfig.Storage = mocks.NewMockStorageService()
+	}
+
+	// JWT authentication (active in handlers)
+	log.Println("🔐 JWT authentication active (password + token-based)")
 	appConfig.Auth = mocks.NewMockAuthService()
-	appConfig.Email = mocks.NewMockEmailService()
-	appConfig.Storage = mocks.NewMockStorageService()
 
 	return composition.NewApp(ctx, appConfig)
 }
@@ -117,17 +202,90 @@ func createDevelopmentApp(ctx context.Context, appConfig composition.AppConfig) 
 func createProductionApp(ctx context.Context, appConfig composition.AppConfig) common.Result[*composition.App] {
 	log.Println("🏭 Initializing production environment...")
 
-	// TODO: Implement real services
-	// appConfig.Database = supabase.NewDatabase(cfg.GetDatabaseConfig())
-	// appConfig.Auth = supabase.NewAuthService(cfg.GetDatabaseConfig())
-	// appConfig.Email = ses.NewEmailService(cfg.GetAWSConfig())
-	// appConfig.Storage = s3.NewStorageService(cfg.GetAWSConfig())
+	cfg := appConfig.Config
 
-	// For now, use mock services
-	appConfig.Database = mocks.NewMockDatabase()
+	// Initialize Database (PostgreSQL)
+	if cfg.Database.URL != "" {
+		log.Println("📊 Connecting to PostgreSQL database...")
+		dbConfig := database.PostgresConfig{
+			DatabaseURL:  cfg.Database.URL,
+			MaxConns:     cfg.Database.MaxConns,
+			MaxIdleConns: cfg.Database.MaxIdleConns,
+			ConnLifetime: cfg.DatabaseConnLifetime,
+		}
+
+		db, err := database.NewSimplePostgresDB(dbConfig)
+		if err != nil {
+			log.Printf("❌ Failed to initialize database: %v", err)
+			log.Println("⚠️  Falling back to mock database")
+			appConfig.Database = mocks.NewMockDatabase()
+		} else {
+			log.Println("✅ PostgreSQL database connected")
+			appConfig.Database = db
+		}
+	} else {
+		log.Println("⚠️  No database URL configured, using mock database")
+		appConfig.Database = mocks.NewMockDatabase()
+	}
+
+	// Initialize Email Service (SMTP)
+	if cfg.SMTP.Host != "" && cfg.SMTP.Username != "" {
+		log.Printf("📧 Configuring SMTP email service (%s)...", cfg.SMTP.Host)
+		emailConfig := email.SMTPConfig{
+			Host:          cfg.SMTP.Host,
+			Port:          cfg.SMTP.Port,
+			Username:      cfg.SMTP.Username,
+			Password:      cfg.SMTP.Password,
+			FromEmail:     cfg.SMTP.FromEmail,
+			FromName:      cfg.SMTP.FromName,
+			UseTLS:        cfg.SMTP.UseTLS,
+			SkipTLSVerify: cfg.SMTP.SkipTLSVerify,
+		}
+
+		emailService, err := email.NewSMTPEmailService(emailConfig)
+		if err != nil {
+			log.Printf("❌ Failed to initialize SMTP email service: %v", err)
+			log.Println("⚠️  Falling back to mock email service")
+			appConfig.Email = mocks.NewMockEmailService()
+		} else {
+			log.Println("✅ SMTP email service configured")
+			appConfig.Email = emailService
+		}
+	} else {
+		log.Println("⚠️  No SMTP configuration found, using mock email service")
+		appConfig.Email = mocks.NewMockEmailService()
+	}
+
+	// Initialize Storage Service (R2)
+	if cfg.R2Storage.AccountID != "" && cfg.R2Storage.BucketName != "" {
+		log.Println("☁️  Configuring Cloudflare R2 storage...")
+		storageConfig := storage.R2StorageConfig{
+			AccountID:       cfg.R2Storage.AccountID,
+			AccessKeyID:     cfg.R2Storage.AccessKeyID,
+			SecretAccessKey: cfg.R2Storage.SecretAccessKey,
+			BucketName:      cfg.R2Storage.BucketName,
+			PublicURL:       cfg.R2Storage.PublicURL,
+		}
+
+		r2Storage, err := storage.NewR2Storage(storageConfig)
+		if err != nil {
+			log.Printf("❌ Failed to initialize R2 storage: %v", err)
+			log.Println("⚠️  Falling back to mock storage service")
+			appConfig.Storage = mocks.NewMockStorageService()
+		} else {
+			log.Println("✅ R2 storage configured")
+			appConfig.Storage = r2Storage
+		}
+	} else {
+		log.Println("⚠️  No R2 configuration found, using mock storage service")
+		appConfig.Storage = mocks.NewMockStorageService()
+	}
+
+	// Auth service (legacy abstraction - JWT auth is implemented in handlers)
+	// Note: Real JWT authentication is active via handlers and middleware
+	// This Auth service is for alternative providers (Supabase, OAuth, etc.)
+	log.Println("🔐 JWT authentication active (password + token-based)")
 	appConfig.Auth = mocks.NewMockAuthService()
-	appConfig.Email = mocks.NewMockEmailService()
-	appConfig.Storage = mocks.NewMockStorageService()
 
 	return composition.NewApp(ctx, appConfig)
 }

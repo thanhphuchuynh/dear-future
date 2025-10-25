@@ -37,6 +37,12 @@ type Config struct {
 	// Supabase Configuration
 	Supabase SupabaseConfig `yaml:"supabase"`
 
+	// R2 Storage Configuration (Cloudflare R2 - S3 compatible)
+	R2Storage R2StorageConfig `yaml:"r2_storage"`
+
+	// SMTP Email Configuration (Gmail, etc.)
+	SMTP SMTPConfig `yaml:"smtp"`
+
 	// File upload limits
 	FileUpload FileUploadConfig `yaml:"file_upload"`
 
@@ -152,6 +158,25 @@ type SupabaseConfig struct {
 	URL        string `yaml:"url"`
 	AnonKey    string `yaml:"anon_key"`
 	ServiceKey string `yaml:"service_key"`
+}
+
+type R2StorageConfig struct {
+	AccountID       string `yaml:"account_id"`        // Cloudflare account ID
+	AccessKeyID     string `yaml:"access_key_id"`     // R2 API token ID
+	SecretAccessKey string `yaml:"secret_access_key"` // R2 API token secret
+	BucketName      string `yaml:"bucket_name"`       // R2 bucket name
+	PublicURL       string `yaml:"public_url"`        // Optional public URL
+}
+
+type SMTPConfig struct {
+	Host          string `yaml:"host"`            // SMTP server host (smtp.gmail.com)
+	Port          string `yaml:"port"`            // SMTP port (587 or 465)
+	Username      string `yaml:"username"`        // SMTP username (email)
+	Password      string `yaml:"password"`        // SMTP password (app password)
+	FromEmail     string `yaml:"from_email"`      // From email address
+	FromName      string `yaml:"from_name"`       // From display name
+	UseTLS        bool   `yaml:"use_tls"`         // Use TLS
+	SkipTLSVerify bool   `yaml:"skip_tls_verify"` // Skip TLS verify (dev only)
 }
 
 type FileUploadConfig struct {
@@ -408,6 +433,46 @@ func applyEnvironmentOverrides(config *Config) {
 	}
 	if serviceKey := os.Getenv("SUPABASE_SERVICE_KEY"); serviceKey != "" {
 		config.Supabase.ServiceKey = serviceKey
+	}
+
+	// R2 Storage (Cloudflare)
+	if r2AccountID := os.Getenv("R2_ACCOUNT_ID"); r2AccountID != "" {
+		config.R2Storage.AccountID = r2AccountID
+	}
+	if r2AccessKeyID := os.Getenv("R2_ACCESS_KEY_ID"); r2AccessKeyID != "" {
+		config.R2Storage.AccessKeyID = r2AccessKeyID
+	}
+	if r2SecretKey := os.Getenv("R2_SECRET_ACCESS_KEY"); r2SecretKey != "" {
+		config.R2Storage.SecretAccessKey = r2SecretKey
+	}
+	if r2Bucket := os.Getenv("R2_BUCKET_NAME"); r2Bucket != "" {
+		config.R2Storage.BucketName = r2Bucket
+	}
+	if r2PublicURL := os.Getenv("R2_PUBLIC_URL"); r2PublicURL != "" {
+		config.R2Storage.PublicURL = r2PublicURL
+	}
+
+	// SMTP Email
+	if smtpHost := os.Getenv("SMTP_HOST"); smtpHost != "" {
+		config.SMTP.Host = smtpHost
+	}
+	if smtpPort := os.Getenv("SMTP_PORT"); smtpPort != "" {
+		config.SMTP.Port = smtpPort
+	}
+	if smtpUsername := os.Getenv("SMTP_USERNAME"); smtpUsername != "" {
+		config.SMTP.Username = smtpUsername
+	}
+	if smtpPassword := os.Getenv("SMTP_PASSWORD"); smtpPassword != "" {
+		config.SMTP.Password = smtpPassword
+	}
+	if smtpFromEmail := os.Getenv("SMTP_FROM_EMAIL"); smtpFromEmail != "" {
+		config.SMTP.FromEmail = smtpFromEmail
+	}
+	if smtpFromName := os.Getenv("SMTP_FROM_NAME"); smtpFromName != "" {
+		config.SMTP.FromName = smtpFromName
+	}
+	if smtpUseTLS := os.Getenv("SMTP_USE_TLS"); smtpUseTLS != "" {
+		config.SMTP.UseTLS = getBoolFromEnv("SMTP_USE_TLS", true)
 	}
 
 	// File upload

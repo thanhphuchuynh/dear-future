@@ -38,6 +38,7 @@ func validateCreateUserRequest(req CreateUserRequest) common.Result[CreateUserRe
 		Email:    emailResult.Value(),
 		Name:     nameResult.Value(),
 		Timezone: timezoneResult.Value(),
+		UserID:   req.UserID,
 	})
 }
 

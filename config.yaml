@@ -14,6 +14,8 @@ server:
   idle_timeout: "60s"
 
 # Database Configuration
+# For local development with Docker: postgresql://postgres:postgres@localhost:5432/dear_future_dev?sslmode=disable
+# For production: Use Supabase connection string via SUPABASE_URL or DATABASE_URL environment variable
 database:
   url: ""  # Set via DATABASE_URL environment variable
   max_conns: 25
@@ -108,3 +110,8 @@ features:
 deployment:
   platform_name: "development"
   container: false
+
+# cors_origins can also be set via CORS_ORIGINS environment variable as a comma-separated list
+cors_origins:
+  - "http://localhost:3000"
+  - "http://localhost:8080"

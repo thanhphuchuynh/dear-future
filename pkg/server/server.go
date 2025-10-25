@@ -14,39 +14,19 @@ import (
 
 // NewServer creates a new HTTP server with all routes configured
 func NewServer(cfg *config.Config, app *composition.App) common.Result[*http.Server] {
-	// Create HTTP mux
-	mux := http.NewServeMux()
-
-	// Setup routes
-	setupRoutes(mux, app)
+	// Create router with all handlers and middleware
+	router := NewRouter(app)
 
 	// Create server with timeouts
 	server := &http.Server{
 		Addr:         cfg.GetServerAddress(),
-		Handler:      mux,
+		Handler:      router,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 		IdleTimeout:  cfg.IdleTimeout,
 	}
 
 	return common.Ok(server)
-}
-
-// setupRoutes configures all HTTP routes
-func setupRoutes(mux *http.ServeMux, app *composition.App) {
-	// Health check endpoint
-	mux.HandleFunc("/health", healthHandler(app))
-
-	// Environment endpoint
-	mux.HandleFunc("/environment/current", environmentHandler(app))
-
-	// API routes
-	mux.HandleFunc("/api/v1/", apiHandler(app))
-
-	// Static file serving (for development)
-	if app.Config().IsDevelopment() {
-		mux.HandleFunc("/", homeHandler())
-	}
 }
 
 // healthHandler returns the health status of the application
