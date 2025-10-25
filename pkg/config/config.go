@@ -197,9 +197,18 @@ type EmailConfig struct {
 }
 
 type SchedulingConfig struct {
-	Interval               string  `yaml:"interval"`
-	MaxRetryAttempts       int     `yaml:"max_retry_attempts"`
-	RetryBackoffMultiplier float64 `yaml:"retry_backoff_multiplier"`
+	Interval               string           `yaml:"interval"`
+	MaxRetryAttempts       int              `yaml:"max_retry_attempts"`
+	RetryBackoffMultiplier float64          `yaml:"retry_backoff_multiplier"`
+	River                  RiverQueueConfig `yaml:"river"`
+}
+
+type RiverQueueConfig struct {
+	Enabled      bool   `yaml:"enabled"`       // Enable River Queue (vs simple scheduler)
+	MaxWorkers   int    `yaml:"max_workers"`   // Max concurrent workers
+	QueueName    string `yaml:"queue_name"`    // Queue name (default: "default")
+	MaxAttempts  int    `yaml:"max_attempts"`  // Max delivery attempts per job
+	PollInterval string `yaml:"poll_interval"` // How often to poll for jobs
 }
 
 type CacheConfig struct {
@@ -342,6 +351,13 @@ func getDefaultConfig() *Config {
 			Interval:               "1m",
 			MaxRetryAttempts:       5,
 			RetryBackoffMultiplier: 2.0,
+			River: RiverQueueConfig{
+				Enabled:      true,
+				MaxWorkers:   10,
+				QueueName:    "default",
+				MaxAttempts:  5,
+				PollInterval: "1s",
+			},
 		},
 		Cache: CacheConfig{
 			Enabled:   false,

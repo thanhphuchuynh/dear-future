@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const userData = await apiClient.getProfile();
           setUser(userData);
-        } catch (error) {
+        } catch {
           // Token is invalid, clear it
           apiClient.logout();
         }

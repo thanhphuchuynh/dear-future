@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -222,7 +223,7 @@ func (p *SimplePostgresDB) UpdateUserProfile(ctx context.Context, profile user.U
 }
 
 // Helper to reconstruct Message from database
-func messageFromDB(id, userID uuid.UUID, title, content string, deliveryDate time.Time, timezone, status, deliveryMethod string, createdAt, updatedAt time.Time) common.Result[message.Message] {
+func messageFromDB(id, userID uuid.UUID, title, content string, deliveryDate time.Time, timezone, status, deliveryMethod string, createdAt, updatedAt time.Time, recurrence message.RecurrencePattern, reminder common.Option[int]) common.Result[message.Message] {
 	var msgStatus message.MessageStatus
 	switch status {
 	case "scheduled":
@@ -247,31 +248,25 @@ func messageFromDB(id, userID uuid.UUID, title, content string, deliveryDate tim
 		method = message.DeliveryEmail
 	}
 
-	// Create message with time.Time delivery date
-	result := message.NewMessage(message.CreateMessageRequest{
-		UserID:         userID,
-		Title:          title,
-		Content:        content,
-		DeliveryDate:   deliveryDate,
-		Timezone:       timezone,
-		DeliveryMethod: method,
-	})
+	deliveredAt := common.None[time.Time]()
 
-	if result.IsErr() {
-		return result
+	stored := message.StoredMessage{
+		ID:              id,
+		UserID:          userID,
+		Title:           title,
+		Content:         content,
+		DeliveryDate:    deliveryDate,
+		Timezone:        timezone,
+		Status:          msgStatus,
+		DeliveryMethod:  method,
+		Recurrence:      recurrence,
+		ReminderMinutes: reminder,
+		CreatedAt:       createdAt,
+		UpdatedAt:       updatedAt,
+		DeliveredAt:     deliveredAt,
 	}
 
-	// Update status if different from scheduled
-	if msgStatus != message.StatusScheduled {
-		statusResult := result.Value().WithStatus(msgStatus)
-		if statusResult.IsErr() {
-			// If status transition fails, just return original message
-			return result
-		}
-		return statusResult
-	}
-
-	return result
+	return message.RestoreMessage(stored)
 }
 
 // SaveMessage inserts a new message
@@ -280,7 +275,19 @@ func (p *SimplePostgresDB) SaveMessage(ctx context.Context, msg message.Message)
 		"timezone":        msg.Timezone(),
 		"delivery_method": string(msg.DeliveryMethod()),
 	}
+	if msg.HasRecurrence() {
+		metadata["recurrence"] = string(msg.Recurrence())
+	}
+	if msg.HasReminder() {
+		metadata["reminder_minutes"] = msg.ReminderMinutes().Value()
+	}
 	metadataJSON, _ := json.Marshal(metadata)
+
+	// Map application status to database status
+	dbStatus := string(msg.Status())
+	if msg.Status() == message.StatusDelivered {
+		dbStatus = "sent"
+	}
 
 	query := `
 		INSERT INTO messages (id, user_id, subject, content, scheduled_for, status, created_at, updated_at, metadata)
@@ -300,7 +307,7 @@ func (p *SimplePostgresDB) SaveMessage(ctx context.Context, msg message.Message)
 		msg.Title(),
 		msg.Content(),
 		msg.DeliveryDate(),
-		string(msg.Status()),
+		dbStatus,
 		msg.CreatedAt(),
 		msg.UpdatedAt(),
 		metadataJSON,
@@ -310,7 +317,7 @@ func (p *SimplePostgresDB) SaveMessage(ctx context.Context, msg message.Message)
 		return common.Err[message.Message](fmt.Errorf("failed to save message: %w", err))
 	}
 
-	return messageFromDB(id, userID, title, content, scheduledFor, msg.Timezone(), status, string(msg.DeliveryMethod()), createdAt, updatedAt)
+	return messageFromDB(id, userID, title, content, scheduledFor, msg.Timezone(), status, string(msg.DeliveryMethod()), createdAt, updatedAt, msg.Recurrence(), msg.ReminderMinutes())
 }
 
 // FindMessageByID finds a message by ID
@@ -337,16 +344,9 @@ func (p *SimplePostgresDB) FindMessageByID(ctx context.Context, messageID uuid.U
 	var metadata map[string]interface{}
 	json.Unmarshal(metadataJSON, &metadata)
 
-	timezone := "UTC"
-	deliveryMethod := "email"
-	if tz, ok := metadata["timezone"].(string); ok {
-		timezone = tz
-	}
-	if dm, ok := metadata["delivery_method"].(string); ok {
-		deliveryMethod = dm
-	}
+	timezone, deliveryMethod, recurrence, reminder := extractMessageMetadata(metadata)
 
-	return messageFromDB(id, userID, title, content, scheduledFor, timezone, status, deliveryMethod, createdAt, updatedAt)
+	return messageFromDB(id, userID, title, content, scheduledFor, timezone, status, deliveryMethod, createdAt, updatedAt, recurrence, reminder)
 }
 
 // FindMessagesByUserID finds all messages for a user
@@ -384,16 +384,9 @@ func (p *SimplePostgresDB) FindMessagesByUserID(ctx context.Context, userID uuid
 		var metadata map[string]interface{}
 		json.Unmarshal(metadataJSON, &metadata)
 
-		timezone := "UTC"
-		deliveryMethod := "email"
-		if tz, ok := metadata["timezone"].(string); ok {
-			timezone = tz
-		}
-		if dm, ok := metadata["delivery_method"].(string); ok {
-			deliveryMethod = dm
-		}
+		timezone, deliveryMethod, recurrence, reminder := extractMessageMetadata(metadata)
 
-		msgResult := messageFromDB(id, uid, title, content, scheduledFor, timezone, status, deliveryMethod, createdAt, updatedAt)
+		msgResult := messageFromDB(id, uid, title, content, scheduledFor, timezone, status, deliveryMethod, createdAt, updatedAt, recurrence, reminder)
 		if msgResult.IsOk() {
 			messages = append(messages, msgResult.Value())
 		}
@@ -402,14 +395,146 @@ func (p *SimplePostgresDB) FindMessagesByUserID(ctx context.Context, userID uuid
 	return common.Ok(messages)
 }
 
+func extractReminder(metadata map[string]interface{}) common.Option[int] {
+	if metadata == nil {
+		return common.None[int]()
+	}
+
+	value, ok := metadata["reminder_minutes"]
+	if !ok {
+		return common.None[int]()
+	}
+
+	switch v := value.(type) {
+	case float64:
+		minutes := int(v)
+		if minutes > 0 {
+			return common.Some(minutes)
+		}
+	case int:
+		if v > 0 {
+			return common.Some(v)
+		}
+	default:
+		return common.None[int]()
+	}
+
+	return common.None[int]()
+}
+
+func extractMessageMetadata(metadata map[string]interface{}) (string, string, message.RecurrencePattern, common.Option[int]) {
+	timezone := "UTC"
+	deliveryMethod := "email"
+	if metadata != nil {
+		if tz, ok := metadata["timezone"].(string); ok && tz != "" {
+			timezone = tz
+		}
+		if dm, ok := metadata["delivery_method"].(string); ok && dm != "" {
+			deliveryMethod = strings.ToLower(dm)
+		}
+	}
+	recurrence := message.RecurrenceNone
+	if metadata != nil {
+		if rc, ok := metadata["recurrence"].(string); ok && rc != "" {
+			recurrence = message.RecurrencePattern(strings.ToLower(rc))
+		}
+	}
+	reminder := extractReminder(metadata)
+	return timezone, deliveryMethod, recurrence, reminder
+}
+
 // FindMessagesByStatus - placeholder implementation
 func (p *SimplePostgresDB) FindMessagesByStatus(ctx context.Context, status message.MessageStatus, limit int) common.Result[[]message.Message] {
-	return common.Ok([]message.Message{})
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := `
+		SELECT id, user_id, subject, content, scheduled_for, status, created_at, updated_at, COALESCE(metadata, '{}'::jsonb)
+		FROM messages
+		WHERE status = $1
+		ORDER BY scheduled_for ASC
+		LIMIT $2
+	`
+
+	rows, err := p.db.QueryContext(ctx, query, string(status), limit)
+	if err != nil {
+		return common.Err[[]message.Message](fmt.Errorf("failed to query messages by status: %w", err))
+	}
+	defer rows.Close()
+
+	var messagesList []message.Message
+	for rows.Next() {
+		var id, uid uuid.UUID
+		var title, content, rowStatus string
+		var scheduledFor, createdAt, updatedAt time.Time
+		var metadataJSON []byte
+
+		err := rows.Scan(&id, &uid, &title, &content, &scheduledFor, &rowStatus, &createdAt, &updatedAt, &metadataJSON)
+		if err != nil {
+			return common.Err[[]message.Message](fmt.Errorf("failed to scan message: %w", err))
+		}
+
+		var metadata map[string]interface{}
+		json.Unmarshal(metadataJSON, &metadata)
+		timezone, deliveryMethod, recurrence, reminder := extractMessageMetadata(metadata)
+
+		msgResult := messageFromDB(id, uid, title, content, scheduledFor, timezone, rowStatus, deliveryMethod, createdAt, updatedAt, recurrence, reminder)
+		if msgResult.IsErr() {
+			return common.Err[[]message.Message](msgResult.Error())
+		}
+
+		messagesList = append(messagesList, msgResult.Value())
+	}
+
+	return common.Ok(messagesList)
 }
 
 // FindDueMessages - placeholder implementation
 func (p *SimplePostgresDB) FindDueMessages(ctx context.Context, before time.Time, limit int) common.Result[[]message.Message] {
-	return common.Ok([]message.Message{})
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := `
+		SELECT id, user_id, subject, content, scheduled_for, status, created_at, updated_at, COALESCE(metadata, '{}'::jsonb)
+		FROM messages
+		WHERE status = 'scheduled' AND scheduled_for <= $1
+		ORDER BY scheduled_for ASC
+		LIMIT $2
+	`
+
+	rows, err := p.db.QueryContext(ctx, query, before, limit)
+	if err != nil {
+		return common.Err[[]message.Message](fmt.Errorf("failed to query due messages: %w", err))
+	}
+	defer rows.Close()
+
+	var dueMessages []message.Message
+	for rows.Next() {
+		var id, uid uuid.UUID
+		var title, content, rowStatus string
+		var scheduledFor, createdAt, updatedAt time.Time
+		var metadataJSON []byte
+
+		err := rows.Scan(&id, &uid, &title, &content, &scheduledFor, &rowStatus, &createdAt, &updatedAt, &metadataJSON)
+		if err != nil {
+			return common.Err[[]message.Message](fmt.Errorf("failed to scan due message: %w", err))
+		}
+
+		var metadata map[string]interface{}
+		json.Unmarshal(metadataJSON, &metadata)
+		timezone, deliveryMethod, recurrence, reminder := extractMessageMetadata(metadata)
+
+		msgResult := messageFromDB(id, uid, title, content, scheduledFor, timezone, rowStatus, deliveryMethod, createdAt, updatedAt, recurrence, reminder)
+		if msgResult.IsErr() {
+			return common.Err[[]message.Message](msgResult.Error())
+		}
+
+		dueMessages = append(dueMessages, msgResult.Value())
+	}
+
+	return common.Ok(dueMessages)
 }
 
 // UpdateMessage updates an existing message
@@ -418,7 +543,19 @@ func (p *SimplePostgresDB) UpdateMessage(ctx context.Context, msg message.Messag
 		"timezone":        msg.Timezone(),
 		"delivery_method": string(msg.DeliveryMethod()),
 	}
+	if msg.HasRecurrence() {
+		metadata["recurrence"] = string(msg.Recurrence())
+	}
+	if msg.HasReminder() {
+		metadata["reminder_minutes"] = msg.ReminderMinutes().Value()
+	}
 	metadataJSON, _ := json.Marshal(metadata)
+
+	// Map application status to database status
+	dbStatus := string(msg.Status())
+	if msg.Status() == message.StatusDelivered {
+		dbStatus = "sent"
+	}
 
 	query := `
 		UPDATE messages
@@ -438,7 +575,7 @@ func (p *SimplePostgresDB) UpdateMessage(ctx context.Context, msg message.Messag
 		msg.Title(),
 		msg.Content(),
 		msg.DeliveryDate(),
-		string(msg.Status()),
+		dbStatus,
 		time.Now(),
 		metadataJSON,
 	).Scan(&id, &userID, &title, &content, &scheduledFor, &status, &createdAt, &updatedAt)
@@ -447,7 +584,7 @@ func (p *SimplePostgresDB) UpdateMessage(ctx context.Context, msg message.Messag
 		return common.Err[message.Message](fmt.Errorf("failed to update message: %w", err))
 	}
 
-	return messageFromDB(id, userID, title, content, scheduledFor, msg.Timezone(), status, string(msg.DeliveryMethod()), createdAt, updatedAt)
+	return messageFromDB(id, userID, title, content, scheduledFor, msg.Timezone(), status, string(msg.DeliveryMethod()), createdAt, updatedAt, msg.Recurrence(), msg.ReminderMinutes())
 }
 
 // DeleteMessage deletes a message by ID
@@ -469,17 +606,109 @@ func (p *SimplePostgresDB) DeleteMessage(ctx context.Context, messageID uuid.UUI
 
 // SaveMessageAttachment - placeholder implementation
 func (p *SimplePostgresDB) SaveMessageAttachment(ctx context.Context, attachment message.MessageAttachment) common.Result[message.MessageAttachment] {
-	return common.Ok(attachment)
+	query := `
+		INSERT INTO message_attachments (id, message_id, file_name, file_type, file_size, storage_path, created_at, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb)
+		RETURNING id, message_id, file_name, file_type, file_size, storage_path, created_at
+	`
+
+	var id, messageID uuid.UUID
+	var fileName, fileType, storagePath string
+	var fileSize int64
+	var createdAt time.Time
+
+	err := p.db.QueryRowContext(
+		ctx,
+		query,
+		attachment.ID(),
+		attachment.MessageID(),
+		attachment.FileName(),
+		attachment.FileType(),
+		attachment.FileSize(),
+		attachment.S3Key(),
+		attachment.UploadedAt(),
+	).Scan(&id, &messageID, &fileName, &fileType, &fileSize, &storagePath, &createdAt)
+
+	if err != nil {
+		return common.Err[message.MessageAttachment](fmt.Errorf("failed to save attachment: %w", err))
+	}
+
+	stored := message.StoredMessageAttachment{
+		ID:         id,
+		MessageID:  messageID,
+		FileName:   fileName,
+		FileType:   fileType,
+		StorageKey: storagePath,
+		FileSize:   fileSize,
+		UploadedAt: createdAt,
+	}
+
+	return message.RestoreMessageAttachment(stored)
 }
 
 // FindAttachmentsByMessageID - placeholder implementation
 func (p *SimplePostgresDB) FindAttachmentsByMessageID(ctx context.Context, messageID uuid.UUID) common.Result[[]message.MessageAttachment] {
-	return common.Ok([]message.MessageAttachment{})
+	query := `
+		SELECT id, message_id, file_name, file_type, file_size, storage_path, created_at
+		FROM message_attachments
+		WHERE message_id = $1
+		ORDER BY created_at ASC
+	`
+
+	rows, err := p.db.QueryContext(ctx, query, messageID)
+	if err != nil {
+		return common.Err[[]message.MessageAttachment](fmt.Errorf("failed to query attachments: %w", err))
+	}
+	defer rows.Close()
+
+	var attachments []message.MessageAttachment
+	for rows.Next() {
+		var id, mid uuid.UUID
+		var fileName, fileType, storagePath string
+		var fileSize int64
+		var createdAt time.Time
+
+		err := rows.Scan(&id, &mid, &fileName, &fileType, &fileSize, &storagePath, &createdAt)
+		if err != nil {
+			return common.Err[[]message.MessageAttachment](fmt.Errorf("failed to scan attachment: %w", err))
+		}
+
+		stored := message.StoredMessageAttachment{
+			ID:         id,
+			MessageID:  mid,
+			FileName:   fileName,
+			FileType:   fileType,
+			StorageKey: storagePath,
+			FileSize:   fileSize,
+			UploadedAt: createdAt,
+		}
+
+		attachmentResult := message.RestoreMessageAttachment(stored)
+		if attachmentResult.IsErr() {
+			return common.Err[[]message.MessageAttachment](attachmentResult.Error())
+		}
+
+		attachments = append(attachments, attachmentResult.Value())
+	}
+
+	return common.Ok(attachments)
 }
 
 // DeleteAttachment - placeholder implementation
 func (p *SimplePostgresDB) DeleteAttachment(ctx context.Context, attachmentID uuid.UUID) common.Result[bool] {
-	return common.Ok(true)
+	query := `DELETE FROM message_attachments WHERE id = $1`
+
+	result, err := p.db.ExecContext(ctx, query, attachmentID)
+	if err != nil {
+		return common.Err[bool](fmt.Errorf("failed to delete attachment: %w", err))
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return common.Err[bool](fmt.Errorf("failed to determine affected rows: %w", err))
+	}
+
+	return common.Ok(rowsAffected > 0)
 }
 
 // SaveDeliveryLog - placeholder implementation

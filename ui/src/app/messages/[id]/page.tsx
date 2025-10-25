@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Navigation from '@/components/Navigation';
 import { apiClient } from '@/lib/api-client';
-import type { Message } from '@/lib/types';
+import type {
+  Message,
+  Attachment,
+  RecurrencePattern,
+  DeliveryMethod,
+} from '@/lib/types';
 
 export default function EditMessagePage() {
   const router = useRouter();
@@ -18,46 +23,124 @@ export default function EditMessagePage() {
     content: '',
     delivery_date: '',
     timezone: '',
-    delivery_method: 'email' as 'email' | 'sms' | 'push',
+    delivery_method: 'email' as DeliveryMethod,
+    recurrence: 'none' as RecurrencePattern,
   });
+  const MAX_ATTACHMENTS = 5;
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+  const recurrenceOptions: { value: RecurrencePattern; label: string }[] = [
+    { value: 'none', label: 'One-time delivery' },
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'yearly', label: 'Yearly' },
+  ];
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [reminderMinutes, setReminderMinutes] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState('');
+  const [attachmentLoading, setAttachmentLoading] = useState(false);
 
   useEffect(() => {
-    loadMessage();
+    const fetchMessage = async () => {
+      try {
+        const data = await apiClient.getMessage(messageId);
+        setMessage(data);
+        setAttachments(data.attachments ?? []);
+        setReminderMinutes(
+          typeof data.reminder_minutes === 'number'
+            ? data.reminder_minutes.toString()
+            : ''
+        );
+
+        const deliveryDate = new Date(data.delivery_date);
+        const formattedDate = deliveryDate.toISOString().slice(0, 16);
+
+        setFormData({
+          title: data.title,
+          content: data.content,
+          delivery_date: formattedDate,
+          timezone: data.timezone,
+          delivery_method: data.delivery_method,
+          recurrence: data.recurrence,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load message');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMessage();
   }, [messageId]);
 
-  const loadMessage = async () => {
+  const handleAttachmentUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    if (!message || !e.target.files) return;
+
+    const files = Array.from(e.target.files);
+    const availableSlots = MAX_ATTACHMENTS - attachments.length;
+    if (availableSlots <= 0) {
+      setAttachmentError(`Maximum of ${MAX_ATTACHMENTS} attachments reached.`);
+      e.target.value = '';
+      return;
+    }
+
+    setAttachmentError('');
+    setAttachmentLoading(true);
+
     try {
-      const data = await apiClient.getMessage(messageId);
-      setMessage(data);
+      for (const file of files.slice(0, availableSlots)) {
+        if (file.size > MAX_FILE_SIZE) {
+          setAttachmentError(`"${file.name}" exceeds the 10MB limit.`);
+          continue;
+        }
 
-      // Format datetime-local value
-      const deliveryDate = new Date(data.delivery_date);
-      const formattedDate = deliveryDate.toISOString().slice(0, 16);
-
-      setFormData({
-        title: data.title,
-        content: data.content,
-        delivery_date: formattedDate,
-        timezone: data.timezone,
-        delivery_method: data.delivery_method,
-      });
+        const uploaded = await apiClient.uploadAttachment(message.id, file);
+        setAttachments((prev) => [...prev, uploaded]);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load message');
+      setAttachmentError(
+        err instanceof Error ? err.message : 'Failed to upload attachment'
+      );
     } finally {
-      setLoading(false);
+      setAttachmentLoading(false);
+      e.target.value = '';
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAttachmentDelete = async (attachmentId: string) => {
+    if (!message) return;
+    if (!confirm('Remove this attachment?')) return;
+
+    setAttachmentError('');
+    setAttachmentLoading(true);
+    try {
+      await apiClient.deleteAttachment(message.id, attachmentId);
+      setAttachments((prev) => prev.filter((att) => att.id !== attachmentId));
+    } catch (err) {
+      setAttachmentError(
+        err instanceof Error ? err.message : 'Failed to delete attachment'
+      );
+    } finally {
+      setAttachmentLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
     setSaving(true);
 
     try {
-      await apiClient.updateMessage(messageId, formData);
+      const payload = {
+        ...formData,
+        reminder_minutes: reminderMinutes ? Number(reminderMinutes) : undefined,
+      };
+
+      await apiClient.updateMessage(messageId, payload);
       router.push('/messages');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update message');
@@ -200,28 +283,73 @@ export default function EditMessagePage() {
                   </p>
                 </div>
 
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="delivery_method"
+                      className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      Delivery Method *
+                    </label>
+                    <select
+                      id="delivery_method"
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      value={formData.delivery_method}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          delivery_method: e.target.value as DeliveryMethod,
+                        })
+                      }
+                    >
+                      <option value="email">Email</option>
+                      <option value="push">Push Notification</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="recurrence"
+                      className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      Recurrence
+                    </label>
+                    <select
+                      id="recurrence"
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      value={formData.recurrence}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          recurrence: e.target.value as RecurrencePattern,
+                        })
+                      }
+                    >
+                      {recurrenceOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <div>
                   <label
-                    htmlFor="delivery_method"
+                    htmlFor="reminder_minutes"
                     className="block text-sm font-medium text-gray-700 dark:text-gray-300"
                   >
-                    Delivery Method *
+                    Reminder (minutes before delivery)
                   </label>
-                  <select
-                    id="delivery_method"
+                  <input
+                    type="number"
+                    min={0}
+                    id="reminder_minutes"
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    value={formData.delivery_method}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        delivery_method: e.target.value as 'email' | 'sms' | 'push',
-                      })
-                    }
-                  >
-                    <option value="email">Email</option>
-                    <option value="sms">SMS</option>
-                    <option value="push">Push Notification</option>
-                  </select>
+                    placeholder="Leave blank for none"
+                    value={reminderMinutes}
+                    onChange={(e) => setReminderMinutes(e.target.value)}
+                  />
                 </div>
 
                 {message && (
@@ -230,7 +358,79 @@ export default function EditMessagePage() {
                       <p>Status: <span className="font-medium">{message.status}</span></p>
                       <p>Created: {new Date(message.created_at).toLocaleString()}</p>
                       <p>Last Updated: {new Date(message.updated_at).toLocaleString()}</p>
+                      <p>Recurrence: {message.recurrence === 'none' ? 'One-time' : message.recurrence}</p>
                     </div>
+                  </div>
+                )}
+
+                {message && (
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Attachments
+                        </h2>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {attachments.length} / {MAX_ATTACHMENTS} files attached
+                        </p>
+                      </div>
+                      <label className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200 hover:bg-blue-100 cursor-pointer">
+                        <input
+                          type="file"
+                          className="hidden"
+                          multiple
+                          disabled={attachments.length >= MAX_ATTACHMENTS}
+                          onChange={handleAttachmentUpload}
+                        />
+                        {attachmentLoading ? 'Uploading...' : 'Add Files'}
+                      </label>
+                    </div>
+                    {attachmentError && (
+                      <p className="mt-2 text-sm text-red-600 dark:text-red-400">{attachmentError}</p>
+                    )}
+                    {attachments.length === 0 ? (
+                      <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
+                        No attachments yet.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {attachments.map((attachment) => (
+                          <li
+                            key={attachment.id}
+                            className="flex items-center justify-between rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2 text-sm"
+                          >
+                            <div>
+                              <p className="text-gray-800 dark:text-gray-100">
+                                {attachment.file_name}
+                              </p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {(attachment.file_size / (1024 * 1024)).toFixed(2)} MB ·{' '}
+                                {new Date(attachment.uploaded_at).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              {attachment.download_url && (
+                                <a
+                                  href={attachment.download_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 dark:text-blue-300 hover:underline"
+                                >
+                                  Download
+                                </a>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleAttachmentDelete(attachment.id)}
+                                className="text-red-500 hover:text-red-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
 

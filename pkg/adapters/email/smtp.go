@@ -67,7 +67,7 @@ func (s *SMTPEmailService) SendMessage(ctx context.Context, deliveryInfo message
 			Subject:   subject,
 		})
 	}
-
+	fmt.Println("river: email sent", "message_id", deliveryInfo.Message.ID().String(), "to", recipient)
 	return common.Ok(effects.EmailResult{
 		MessageID: deliveryInfo.Message.ID().String(),
 		Status:    effects.EmailStatusSent,
@@ -165,12 +165,22 @@ func (s *SMTPEmailService) ValidateEmailConfiguration(ctx context.Context) commo
 		return common.Ok(true)
 	}
 
-	// For non-TLS connections (STARTTLS)
+	// For non-TLS connections (STARTTLS on port 587)
 	client, err := smtp.Dial(addr)
 	if err != nil {
 		return common.Err[bool](fmt.Errorf("failed to connect to SMTP server: %w", err))
 	}
 	defer client.Quit()
+
+	// Upgrade connection to TLS using STARTTLS
+	tlsConfig := &tls.Config{
+		ServerName:         s.config.Host,
+		InsecureSkipVerify: s.config.SkipTLSVerify,
+	}
+
+	if err := client.StartTLS(tlsConfig); err != nil {
+		return common.Err[bool](fmt.Errorf("STARTTLS failed: %w", err))
+	}
 
 	if err := client.Auth(auth); err != nil {
 		return common.Err[bool](fmt.Errorf("SMTP authentication failed: %w", err))

@@ -10,6 +10,8 @@ import type {
   User,
   HealthStatus,
   ApiError,
+  Attachment,
+  AnalyticsSummary,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
@@ -44,15 +46,17 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    };
+    const headers = new Headers(options.headers);
+
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    if (!isFormData && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
 
     if (this.accessToken && !endpoint.includes('/auth/')) {
-      headers['Authorization'] = `Bearer ${this.accessToken}`;
+      headers.set('Authorization', `Bearer ${this.accessToken}`);
     }
-    
+
     const response = await fetch(url, {
       ...options,
       headers,
@@ -118,7 +122,7 @@ class ApiClient {
   }
 
   async getMessage(id: string): Promise<Message> {
-    return this.request<Message>(`/messages/${id}`);
+    return this.request<Message>(`/messages?id=${encodeURIComponent(id)}`);
   }
 
   async createMessage(data: CreateMessageRequest): Promise<Message> {
@@ -131,16 +135,55 @@ class ApiClient {
   }
 
   async updateMessage(id: string, data: UpdateMessageRequest): Promise<Message> {
-    return this.request<Message>(`/messages/${id}`, {
+    const payload: UpdateMessageRequest = { ...data };
+    if (payload.delivery_date) {
+      payload.delivery_date = new Date(payload.delivery_date).toISOString();
+    }
+
+    return this.request<Message>(`/messages?id=${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
   }
 
   async deleteMessage(id: string): Promise<void> {
-    await this.request<void>(`/messages/${id}`, {
+    await this.request<void>(`/messages?id=${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
+  }
+
+  async uploadAttachment(messageId: string, file: File): Promise<Attachment> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return this.request<Attachment>(
+      `/messages/attachments?message_id=${encodeURIComponent(messageId)}`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    );
+  }
+
+  async listAttachments(messageId: string): Promise<Attachment[]> {
+    return this.request<Attachment[]>(
+      `/messages/attachments?message_id=${encodeURIComponent(messageId)}`
+    );
+  }
+
+  async deleteAttachment(messageId: string, attachmentId: string): Promise<void> {
+    await this.request<void>(
+      `/messages/attachments?message_id=${encodeURIComponent(
+        messageId
+      )}&attachment_id=${encodeURIComponent(attachmentId)}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+    return this.request<AnalyticsSummary>('/analytics/summary');
   }
 }
 

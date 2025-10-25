@@ -26,7 +26,7 @@ func validateCreateMessageRequest(req CreateMessageRequest) common.Result[Create
 	}
 
 	// Validate delivery date
-	deliveryResult := validateDeliveryDate(req.DeliveryDate, req.Timezone)
+	deliveryResult := validateDeliveryDate(req.DeliveryDate, req.Timezone, false)
 	if deliveryResult.IsErr() {
 		return common.Err[CreateMessageRequest](deliveryResult.Error())
 	}
@@ -37,13 +37,27 @@ func validateCreateMessageRequest(req CreateMessageRequest) common.Result[Create
 		return common.Err[CreateMessageRequest](methodResult.Error())
 	}
 
+	// Validate recurrence pattern
+	recurrenceResult := validateRecurrence(req.Recurrence)
+	if recurrenceResult.IsErr() {
+		return common.Err[CreateMessageRequest](recurrenceResult.Error())
+	}
+
+	// Validate reminder offset
+	reminderResult := validateReminderMinutes(req.ReminderMinutes)
+	if reminderResult.IsErr() {
+		return common.Err[CreateMessageRequest](reminderResult.Error())
+	}
+
 	return common.Ok(CreateMessageRequest{
-		UserID:         req.UserID,
-		Title:          titleResult.Value(),
-		Content:        contentResult.Value(),
-		DeliveryDate:   req.DeliveryDate,
-		Timezone:       req.Timezone,
-		DeliveryMethod: methodResult.Value(),
+		UserID:          req.UserID,
+		Title:           titleResult.Value(),
+		Content:         contentResult.Value(),
+		DeliveryDate:    req.DeliveryDate,
+		Timezone:        req.Timezone,
+		DeliveryMethod:  methodResult.Value(),
+		Recurrence:      recurrenceResult.Value(),
+		ReminderMinutes: reminderResult.Value(),
 	})
 }
 
@@ -91,7 +105,7 @@ func validateContent(content string) common.Result[string] {
 }
 
 // validateDeliveryDate validates the delivery date and timezone
-func validateDeliveryDate(deliveryDate time.Time, timezone string) common.Result[time.Time] {
+func validateDeliveryDate(deliveryDate time.Time, timezone string, allowPast bool) common.Result[time.Time] {
 	// Validate timezone first
 	if timezone == "" {
 		timezone = "UTC"
@@ -106,8 +120,8 @@ func validateDeliveryDate(deliveryDate time.Time, timezone string) common.Result
 	deliveryInTz := deliveryDate.In(loc)
 	now := time.Now().In(loc)
 
-	// Must be in the future
-	if deliveryInTz.Before(now) {
+	// Must be in the future unless explicitly allowed (used when rehydrating existing messages)
+	if !allowPast && deliveryInTz.Before(now) {
 		return common.Err[time.Time](errors.New("delivery date must be in the future"))
 	}
 
@@ -117,10 +131,12 @@ func validateDeliveryDate(deliveryDate time.Time, timezone string) common.Result
 		return common.Err[time.Time](errors.New("delivery date is too far in the future"))
 	}
 
-	// Must be at least 1 minute in the future to allow for processing
-	minFuture := now.Add(1 * time.Minute)
-	if deliveryInTz.Before(minFuture) {
-		return common.Err[time.Time](errors.New("delivery date must be at least 1 minute in the future"))
+	if !allowPast {
+		// Must be at least 1 minute in the future to allow for processing
+		minFuture := now.Add(1 * time.Minute)
+		if deliveryInTz.Before(minFuture) {
+			return common.Err[time.Time](errors.New("delivery date must be at least 1 minute in the future"))
+		}
 	}
 
 	return common.Ok(deliveryDate)
@@ -136,6 +152,42 @@ func validateDeliveryMethod(method DeliveryMethod) common.Result[DeliveryMethod]
 	default:
 		return common.Err[DeliveryMethod](errors.New("invalid delivery method"))
 	}
+}
+
+// validateRecurrence validates recurrence pattern
+func validateRecurrence(pattern RecurrencePattern) common.Result[RecurrencePattern] {
+	if pattern == "" {
+		return common.Ok(RecurrenceNone)
+	}
+
+	switch pattern {
+	case RecurrenceNone, RecurrenceDaily, RecurrenceWeekly, RecurrenceMonthly, RecurrenceYearly:
+		return common.Ok(pattern)
+	default:
+		return common.Err[RecurrencePattern](errors.New("invalid recurrence pattern"))
+	}
+}
+
+// validateReminderMinutes validates reminder offsets
+func validateReminderMinutes(reminder common.Option[int]) common.Result[common.Option[int]] {
+	if reminder.IsNone() {
+		return common.Ok(common.None[int]())
+	}
+
+	value := reminder.Value()
+	if value == 0 {
+		return common.Ok(common.None[int]())
+	}
+	if value < 0 {
+		return common.Err[common.Option[int]](errors.New("reminder minutes must be positive"))
+	}
+
+	// Limit reminders to 30 days (43200 minutes) to prevent unrealistic values
+	if value > 43200 {
+		return common.Err[common.Option[int]](errors.New("reminder minutes cannot exceed 30 days"))
+	}
+
+	return common.Ok(common.Some(value))
 }
 
 // validateFileName validates attachment file name
@@ -227,7 +279,7 @@ func validateMessage(message Message) common.Result[Message] {
 	}
 
 	// Validate delivery date
-	deliveryResult := validateDeliveryDate(message.deliveryDate, message.timezone)
+	deliveryResult := validateDeliveryDate(message.deliveryDate, message.timezone, true)
 	if deliveryResult.IsErr() {
 		return common.Err[Message](deliveryResult.Error())
 	}
@@ -242,6 +294,18 @@ func validateMessage(message Message) common.Result[Message] {
 	statusResult := validateMessageStatus(message.status)
 	if statusResult.IsErr() {
 		return common.Err[Message](statusResult.Error())
+	}
+
+	// Validate recurrence
+	recurrenceResult := validateRecurrence(message.recurrence)
+	if recurrenceResult.IsErr() {
+		return common.Err[Message](recurrenceResult.Error())
+	}
+
+	// Validate reminder option
+	reminderResult := validateReminderMinutes(message.reminderOffset)
+	if reminderResult.IsErr() {
+		return common.Err[Message](reminderResult.Error())
 	}
 
 	return common.Ok(message)
@@ -286,9 +350,13 @@ func normalizeMessage(message Message) common.Result[Message] {
 	normalizedTitle := strings.TrimSpace(message.title)
 	normalizedContent := strings.TrimSpace(message.content)
 	normalizedTimezone := strings.TrimSpace(message.timezone)
+	normalizedRecurrence := message.recurrence
 
 	if normalizedTimezone == "" {
 		normalizedTimezone = "UTC"
+	}
+	if normalizedRecurrence == "" {
+		normalizedRecurrence = RecurrenceNone
 	}
 
 	normalized := Message{
@@ -300,6 +368,8 @@ func normalizeMessage(message Message) common.Result[Message] {
 		timezone:       normalizedTimezone,
 		status:         message.status,
 		deliveryMethod: message.deliveryMethod,
+		recurrence:     normalizedRecurrence,
+		reminderOffset: message.reminderOffset,
 		createdAt:      message.createdAt,
 		updatedAt:      message.updatedAt,
 		deliveredAt:    message.deliveredAt,

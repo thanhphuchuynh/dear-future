@@ -27,6 +27,17 @@ const (
 	DeliveryPush  DeliveryMethod = "push"
 )
 
+// RecurrencePattern represents how often a message repeats
+type RecurrencePattern string
+
+const (
+	RecurrenceNone    RecurrencePattern = "none"
+	RecurrenceDaily   RecurrencePattern = "daily"
+	RecurrenceWeekly  RecurrencePattern = "weekly"
+	RecurrenceMonthly RecurrencePattern = "monthly"
+	RecurrenceYearly  RecurrencePattern = "yearly"
+)
+
 // Message represents an immutable message entity
 type Message struct {
 	id             uuid.UUID
@@ -37,6 +48,8 @@ type Message struct {
 	timezone       string
 	status         MessageStatus
 	deliveryMethod DeliveryMethod
+	recurrence     RecurrencePattern
+	reminderOffset common.Option[int]
 	createdAt      time.Time
 	updatedAt      time.Time
 	deliveredAt    common.Option[time.Time]
@@ -55,20 +68,67 @@ type MessageAttachment struct {
 
 // CreateMessageRequest contains data needed to create a new message
 type CreateMessageRequest struct {
-	UserID         uuid.UUID
-	Title          string
-	Content        string
-	DeliveryDate   time.Time
-	Timezone       string
-	DeliveryMethod DeliveryMethod
+	UserID          uuid.UUID
+	Title           string
+	Content         string
+	DeliveryDate    time.Time
+	Timezone        string
+	DeliveryMethod  DeliveryMethod
+	Recurrence      RecurrencePattern
+	ReminderMinutes common.Option[int]
 }
 
 // UpdateMessageRequest contains data for updating a message
 type UpdateMessageRequest struct {
-	Title        common.Option[string]
-	Content      common.Option[string]
-	DeliveryDate common.Option[time.Time]
-	Timezone     common.Option[string]
+	Title           common.Option[string]
+	Content         common.Option[string]
+	DeliveryDate    common.Option[time.Time]
+	Timezone        common.Option[string]
+	Recurrence      common.Option[RecurrencePattern]
+	ReminderMinutes common.Option[int]
+}
+
+// StoredMessage represents persisted message data used to reconstruct domain entities
+type StoredMessage struct {
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	Title           string
+	Content         string
+	DeliveryDate    time.Time
+	Timezone        string
+	Status          MessageStatus
+	DeliveryMethod  DeliveryMethod
+	Recurrence      RecurrencePattern
+	ReminderMinutes common.Option[int]
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	DeliveredAt     common.Option[time.Time]
+}
+
+// RestoreMessage rebuilds a Message from stored data
+func RestoreMessage(data StoredMessage) common.Result[Message] {
+	message := Message{
+		id:             data.ID,
+		userID:         data.UserID,
+		title:          data.Title,
+		content:        data.Content,
+		deliveryDate:   data.DeliveryDate,
+		timezone:       data.Timezone,
+		status:         data.Status,
+		deliveryMethod: data.DeliveryMethod,
+		recurrence:     data.Recurrence,
+		reminderOffset: data.ReminderMinutes,
+		createdAt:      data.CreatedAt,
+		updatedAt:      data.UpdatedAt,
+		deliveredAt:    data.DeliveredAt,
+	}
+
+	validMessage := validateMessage(message)
+	if validMessage.IsErr() {
+		return validMessage
+	}
+
+	return normalizeMessage(validMessage.Value())
 }
 
 // MessageWithAttachments represents a message with its attachments
@@ -111,6 +171,8 @@ func NewMessage(req CreateMessageRequest) common.Result[Message] {
 		timezone:       validReq.Value().Timezone,
 		status:         StatusScheduled,
 		deliveryMethod: validReq.Value().DeliveryMethod,
+		recurrence:     validReq.Value().Recurrence,
+		reminderOffset: validReq.Value().ReminderMinutes,
 		createdAt:      now,
 		updatedAt:      now,
 		deliveredAt:    common.None[time.Time](),
@@ -163,6 +225,42 @@ func NewMessageAttachment(messageID uuid.UUID, fileName, fileType, s3Key string,
 	return common.Ok(attachment)
 }
 
+// StoredMessageAttachment represents persisted attachment data
+type StoredMessageAttachment struct {
+	ID         uuid.UUID
+	MessageID  uuid.UUID
+	FileName   string
+	FileType   string
+	StorageKey string
+	FileSize   int64
+	UploadedAt time.Time
+}
+
+// RestoreMessageAttachment rebuilds an attachment entity from stored data
+func RestoreMessageAttachment(data StoredMessageAttachment) common.Result[MessageAttachment] {
+	attachment := MessageAttachment{
+		id:         data.ID,
+		messageID:  data.MessageID,
+		fileName:   data.FileName,
+		fileType:   data.FileType,
+		s3Key:      data.StorageKey,
+		fileSize:   data.FileSize,
+		uploadedAt: data.UploadedAt,
+	}
+
+	// Reuse validation to ensure attachment integrity
+	validFileName := validateFileName(attachment.fileName)
+	if validFileName.IsErr() {
+		return common.Err[MessageAttachment](validFileName.Error())
+	}
+	validFileType := validateFileType(attachment.fileType)
+	if validFileType.IsErr() {
+		return common.Err[MessageAttachment](validFileType.Error())
+	}
+
+	return common.Ok(attachment)
+}
+
 // Getters for Message (immutable access)
 func (m Message) ID() uuid.UUID {
 	return m.id
@@ -194,6 +292,29 @@ func (m Message) Status() MessageStatus {
 
 func (m Message) DeliveryMethod() DeliveryMethod {
 	return m.deliveryMethod
+}
+
+func (m Message) Recurrence() RecurrencePattern {
+	return m.recurrence
+}
+
+func (m Message) ReminderMinutes() common.Option[int] {
+	return m.reminderOffset
+}
+
+func (m Message) HasRecurrence() bool {
+	return m.recurrence != RecurrenceNone
+}
+
+func (m Message) HasReminder() bool {
+	return m.reminderOffset.IsSome()
+}
+
+func (m Message) ReminderDuration() time.Duration {
+	if m.reminderOffset.IsSome() {
+		return time.Duration(m.reminderOffset.Value()) * time.Minute
+	}
+	return 0
 }
 
 func (m Message) CreatedAt() time.Time {
@@ -272,6 +393,8 @@ func (m Message) WithTitle(title string) common.Result[Message] {
 		timezone:       m.timezone,
 		status:         m.status,
 		deliveryMethod: m.deliveryMethod,
+		recurrence:     m.recurrence,
+		reminderOffset: m.reminderOffset,
 		createdAt:      m.createdAt,
 		updatedAt:      time.Now(),
 		deliveredAt:    m.deliveredAt,
@@ -295,6 +418,8 @@ func (m Message) WithContent(content string) common.Result[Message] {
 		timezone:       m.timezone,
 		status:         m.status,
 		deliveryMethod: m.deliveryMethod,
+		recurrence:     m.recurrence,
+		reminderOffset: m.reminderOffset,
 		createdAt:      m.createdAt,
 		updatedAt:      time.Now(),
 		deliveredAt:    m.deliveredAt,
@@ -304,7 +429,7 @@ func (m Message) WithContent(content string) common.Result[Message] {
 
 // WithDeliveryDate returns a new Message with updated delivery date
 func (m Message) WithDeliveryDate(deliveryDate time.Time, timezone string) common.Result[Message] {
-	validDelivery := validateDeliveryDate(deliveryDate, timezone)
+	validDelivery := validateDeliveryDate(deliveryDate, timezone, false)
 	if validDelivery.IsErr() {
 		return common.Err[Message](validDelivery.Error())
 	}
@@ -318,6 +443,8 @@ func (m Message) WithDeliveryDate(deliveryDate time.Time, timezone string) commo
 		timezone:       timezone,
 		status:         m.status,
 		deliveryMethod: m.deliveryMethod,
+		recurrence:     m.recurrence,
+		reminderOffset: m.reminderOffset,
 		createdAt:      m.createdAt,
 		updatedAt:      time.Now(),
 		deliveredAt:    m.deliveredAt,
@@ -349,10 +476,64 @@ func (m Message) WithStatus(status MessageStatus) common.Result[Message] {
 		timezone:       m.timezone,
 		status:         status,
 		deliveryMethod: m.deliveryMethod,
+		recurrence:     m.recurrence,
+		reminderOffset: m.reminderOffset,
 		createdAt:      m.createdAt,
 		updatedAt:      now,
 		deliveredAt:    deliveredAt,
 	}
+	return common.Ok(updated)
+}
+
+// WithRecurrence returns a new Message with updated recurrence pattern
+func (m Message) WithRecurrence(pattern RecurrencePattern) common.Result[Message] {
+	validRecurrence := validateRecurrence(pattern)
+	if validRecurrence.IsErr() {
+		return common.Err[Message](validRecurrence.Error())
+	}
+
+	updated := Message{
+		id:             m.id,
+		userID:         m.userID,
+		title:          m.title,
+		content:        m.content,
+		deliveryDate:   m.deliveryDate,
+		timezone:       m.timezone,
+		status:         m.status,
+		deliveryMethod: m.deliveryMethod,
+		recurrence:     validRecurrence.Value(),
+		reminderOffset: m.reminderOffset,
+		createdAt:      m.createdAt,
+		updatedAt:      time.Now(),
+		deliveredAt:    m.deliveredAt,
+	}
+
+	return common.Ok(updated)
+}
+
+// WithReminderMinutes returns a new Message with updated reminder offset
+func (m Message) WithReminderMinutes(reminder common.Option[int]) common.Result[Message] {
+	validReminder := validateReminderMinutes(reminder)
+	if validReminder.IsErr() {
+		return common.Err[Message](validReminder.Error())
+	}
+
+	updated := Message{
+		id:             m.id,
+		userID:         m.userID,
+		title:          m.title,
+		content:        m.content,
+		deliveryDate:   m.deliveryDate,
+		timezone:       m.timezone,
+		status:         m.status,
+		deliveryMethod: m.deliveryMethod,
+		recurrence:     m.recurrence,
+		reminderOffset: validReminder.Value(),
+		createdAt:      m.createdAt,
+		updatedAt:      time.Now(),
+		deliveredAt:    m.deliveredAt,
+	}
+
 	return common.Ok(updated)
 }
 
@@ -390,6 +571,20 @@ func (m Message) UpdateMessage(req UpdateMessageRequest) common.Result[Message] 
 		})
 	}
 
+	// Apply recurrence update if provided
+	if req.Recurrence.IsSome() {
+		result = common.Bind(result, func(message Message) common.Result[Message] {
+			return message.WithRecurrence(req.Recurrence.Value())
+		})
+	}
+
+	// Apply reminder update if provided
+	if req.ReminderMinutes.IsSome() {
+		result = common.Bind(result, func(message Message) common.Result[Message] {
+			return message.WithReminderMinutes(req.ReminderMinutes)
+		})
+	}
+
 	return result
 }
 
@@ -422,6 +617,29 @@ func (m Message) GetDeliveryTimeInTimezone() common.Result[time.Time] {
 // GetTimeUntilDelivery returns the duration until delivery
 func (m Message) GetTimeUntilDelivery() time.Duration {
 	return time.Until(m.deliveryDate)
+}
+
+// NextRecurrenceTime calculates the next delivery time for recurring messages
+func (m Message) NextRecurrenceTime() common.Result[time.Time] {
+	if !m.HasRecurrence() {
+		return common.Err[time.Time](errors.New("message is not recurring"))
+	}
+
+	var next time.Time
+	switch m.recurrence {
+	case RecurrenceDaily:
+		next = m.deliveryDate.Add(24 * time.Hour)
+	case RecurrenceWeekly:
+		next = m.deliveryDate.Add(7 * 24 * time.Hour)
+	case RecurrenceMonthly:
+		next = m.deliveryDate.AddDate(0, 1, 0)
+	case RecurrenceYearly:
+		next = m.deliveryDate.AddDate(1, 0, 0)
+	default:
+		return common.Err[time.Time](errors.New("unsupported recurrence pattern"))
+	}
+
+	return common.Ok(next)
 }
 
 // HasAttachments returns true if the message has attachments

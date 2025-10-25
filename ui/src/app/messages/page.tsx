@@ -13,7 +13,7 @@ export default function MessagesPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState<'all' | 'scheduled' | 'sent'>('all');
+  const [filter, setFilter] = useState<'all' | 'scheduled' | 'delivered'>('all');
 
   useEffect(() => {
     loadMessages();
@@ -102,14 +102,14 @@ export default function MessagesPage() {
                 Scheduled ({messages.filter((m) => m.status === 'scheduled').length})
               </button>
               <button
-                onClick={() => setFilter('sent')}
+                onClick={() => setFilter('delivered')}
                 className={`px-4 py-2 text-sm font-medium rounded-md ${
-                  filter === 'sent'
+                  filter === 'delivered'
                     ? 'bg-blue-600 text-white'
                     : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600'
                 }`}
               >
-                Sent ({messages.filter((m) => m.status === 'sent').length})
+                Delivered ({messages.filter((m) => m.status === 'delivered').length})
               </button>
             </div>
 
@@ -177,6 +177,44 @@ export default function MessagesPage() {
                                 Delivery: {new Date(message.delivery_date).toLocaleString()}
                               </span>
                               <span>Via: {message.delivery_method}</span>
+                            </div>
+                            <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                              {message.recurrence !== 'none' && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200">
+                                  <svg
+                                    className="h-3 w-3"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M4 4v5h.582M20 20v-5h-.581M4 9a8 8 0 0113.657-5.657L20 6m0 9a8 8 0 01-13.657 5.657L4 18"
+                                    />
+                                  </svg>
+                                  Recurring
+                                </span>
+                              )}
+                              {message.attachment_count > 0 && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-gray-600 dark:bg-gray-700 dark:text-gray-200">
+                                  <svg
+                                    className="h-3 w-3"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.415-6.414a4 4 0 00-5.657-5.657L6.343 9.172"
+                                    />
+                                  </svg>
+                                  {message.attachment_count} attachments
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="flex gap-2 ml-4">

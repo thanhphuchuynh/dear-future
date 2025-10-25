@@ -25,6 +25,8 @@ func NewRouter(app *composition.App) *http.ServeMux {
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(app, jwtService)
 	messageHandler := handlers.NewMessageHandler(app)
+	attachmentHandler := handlers.NewAttachmentHandler(app)
+	analyticsHandler := handlers.NewAnalyticsHandler(app)
 
 	// Create middleware chain
 	authMiddleware := middleware.AuthMiddleware(jwtService)
@@ -57,6 +59,8 @@ func NewRouter(app *composition.App) *http.ServeMux {
 	// Message routes (authenticated)
 	mux.Handle("/api/v1/messages", chain(globalMiddleware, authMiddleware)(http.HandlerFunc(handleMessagesRoute(messageHandler))))
 	mux.Handle("/api/v1/messages/create", chain(globalMiddleware, authMiddleware)(http.HandlerFunc(messageHandler.CreateMessage)))
+	mux.Handle("/api/v1/messages/attachments", chain(globalMiddleware, authMiddleware)(http.HandlerFunc(handleAttachmentsRoute(attachmentHandler))))
+	mux.Handle("/api/v1/analytics/summary", chain(globalMiddleware, authMiddleware)(http.HandlerFunc(analyticsHandler.GetSummary)))
 
 	// API info route
 	mux.Handle("/api/v1/", globalMiddleware(http.HandlerFunc(apiInfoHandler(app))))
@@ -86,6 +90,21 @@ func handleMessagesRoute(h *handlers.MessageHandler) http.HandlerFunc {
 			h.UpdateMessage(w, r)
 		case http.MethodDelete:
 			h.DeleteMessage(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleAttachmentsRoute(h *handlers.AttachmentHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			h.Upload(w, r)
+		case http.MethodGet:
+			h.List(w, r)
+		case http.MethodDelete:
+			h.Delete(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}

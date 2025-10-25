@@ -31,6 +31,11 @@ type App struct {
 	fileHandler    *FileHandler
 }
 
+type schedulerLifecycle interface {
+	Start(ctx context.Context) common.Result[bool]
+	Stop(ctx context.Context) common.Result[bool]
+}
+
 // UserService coordinates user-related operations
 type UserService struct {
 	db     effects.Database
@@ -256,9 +261,10 @@ func (a *App) Start(ctx context.Context) common.Result[bool] {
 	}
 
 	// Start background services if needed
-	if a.scheduling != nil {
-		// Start message scheduler
-		// This would typically start a goroutine for scheduled processing
+	if runner, ok := a.scheduling.(schedulerLifecycle); ok {
+		if startResult := runner.Start(ctx); startResult.IsErr() {
+			return common.Err[bool](fmt.Errorf("failed to start scheduler: %w", startResult.Error()))
+		}
 	}
 
 	return common.Ok(true)
@@ -271,6 +277,11 @@ func (a *App) Stop(ctx context.Context) common.Result[bool] {
 	}
 
 	// Stop background services
+	if runner, ok := a.scheduling.(schedulerLifecycle); ok {
+		if stopResult := runner.Stop(ctx); stopResult.IsErr() {
+			return common.Err[bool](fmt.Errorf("failed to stop scheduler: %w", stopResult.Error()))
+		}
+	}
 	// Close database connections
 	// Cleanup resources
 

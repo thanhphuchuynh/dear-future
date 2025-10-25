@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/thanhphuchuynh/dear-future/pkg/adapters/database"
 	"github.com/thanhphuchuynh/dear-future/pkg/adapters/email"
@@ -19,6 +20,7 @@ import (
 	"github.com/thanhphuchuynh/dear-future/pkg/domain/common"
 	"github.com/thanhphuchuynh/dear-future/pkg/mocks"
 	"github.com/thanhphuchuynh/dear-future/pkg/server"
+	"github.com/thanhphuchuynh/dear-future/pkg/services/scheduler"
 )
 
 func main() {
@@ -195,6 +197,30 @@ func createDevelopmentApp(ctx context.Context, appConfig composition.AppConfig) 
 	log.Println("🔐 JWT authentication active (password + token-based)")
 	appConfig.Auth = mocks.NewMockAuthService()
 
+	// Initialize scheduling service with River Queue
+	if cfg.Database.URL != "" {
+		log.Println("📋 Initializing River Queue scheduler...")
+		pool, err := pgxpool.New(ctx, cfg.Database.URL)
+		if err != nil {
+			log.Printf("❌ Failed to create pgxpool for River: %v", err)
+			log.Println("⚠️  Falling back to simple scheduler")
+			appConfig.Scheduling = scheduler.NewSimpleScheduler(appConfig.Database, appConfig.Email, cfg)
+		} else {
+			riverScheduler, err := scheduler.NewRiverScheduler(pool, appConfig.Database, appConfig.Email, cfg)
+			if err != nil {
+				log.Printf("❌ Failed to initialize River scheduler: %v", err)
+				log.Println("⚠️  Falling back to simple scheduler")
+				appConfig.Scheduling = scheduler.NewSimpleScheduler(appConfig.Database, appConfig.Email, cfg)
+			} else {
+				log.Println("✅ River Queue scheduler initialized")
+				appConfig.Scheduling = riverScheduler
+			}
+		}
+	} else {
+		log.Println("⚠️  No database URL, using simple scheduler")
+		appConfig.Scheduling = scheduler.NewSimpleScheduler(appConfig.Database, appConfig.Email, cfg)
+	}
+
 	return composition.NewApp(ctx, appConfig)
 }
 
@@ -286,6 +312,30 @@ func createProductionApp(ctx context.Context, appConfig composition.AppConfig) c
 	// This Auth service is for alternative providers (Supabase, OAuth, etc.)
 	log.Println("🔐 JWT authentication active (password + token-based)")
 	appConfig.Auth = mocks.NewMockAuthService()
+
+	// Initialize scheduling service with River Queue
+	if cfg.Database.URL != "" {
+		log.Println("📋 Initializing River Queue scheduler...")
+		pool, err := pgxpool.New(ctx, cfg.Database.URL)
+		if err != nil {
+			log.Printf("❌ Failed to create pgxpool for River: %v", err)
+			log.Println("⚠️  Falling back to simple scheduler")
+			appConfig.Scheduling = scheduler.NewSimpleScheduler(appConfig.Database, appConfig.Email, cfg)
+		} else {
+			riverScheduler, err := scheduler.NewRiverScheduler(pool, appConfig.Database, appConfig.Email, cfg)
+			if err != nil {
+				log.Printf("❌ Failed to initialize River scheduler: %v", err)
+				log.Println("⚠️  Falling back to simple scheduler")
+				appConfig.Scheduling = scheduler.NewSimpleScheduler(appConfig.Database, appConfig.Email, cfg)
+			} else {
+				log.Println("✅ River Queue scheduler initialized")
+				appConfig.Scheduling = riverScheduler
+			}
+		}
+	} else {
+		log.Println("⚠️  No database URL, using simple scheduler")
+		appConfig.Scheduling = scheduler.NewSimpleScheduler(appConfig.Database, appConfig.Email, cfg)
+	}
 
 	return composition.NewApp(ctx, appConfig)
 }

@@ -65,11 +65,29 @@ email:
   templates_path: "./templates"
   rate_limit: 100
 
+# SMTP Configuration (Gmail)
+smtp:
+  host: "smtp.gmail.com"
+  port: "587"
+  username: "hthanhphuc99@gmail.com"
+  password: "dbuh odfh wuvg xmju"
+  from_email: "hthanhphuc99@gmail.com"
+  from_name: "Dear Future"
+  use_tls: false  # false for STARTTLS on port 587, true for direct TLS on port 465
+  skip_tls_verify: false
+
 # Scheduling Configuration
 scheduling:
   interval: "1m"
   max_retry_attempts: 5
   retry_backoff_multiplier: 2.0
+  # River Queue Configuration (PostgreSQL-backed job queue)
+  river:
+    enabled: true              # Enable River Queue scheduler (recommended for production)
+    max_workers: 10            # Maximum concurrent workers processing jobs
+    queue_name: "default"      # Queue name for message delivery jobs
+    max_attempts: 5            # Maximum delivery attempts before marking as failed
+    poll_interval: "1s"        # How often to poll for new jobs
 
 # Cache Configuration
 cache:

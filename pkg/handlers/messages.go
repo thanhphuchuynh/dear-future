@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/thanhphuchuynh/dear-future/pkg/composition"
+	"github.com/thanhphuchuynh/dear-future/pkg/domain/common"
 	"github.com/thanhphuchuynh/dear-future/pkg/domain/message"
 	"github.com/thanhphuchuynh/dear-future/pkg/middleware"
 )
@@ -28,25 +29,31 @@ func NewMessageHandler(app *composition.App) *MessageHandler {
 
 // CreateMessageRequest represents a message creation request
 type CreateMessageRequest struct {
-	Title          string `json:"title"`
-	Content        string `json:"content"`
-	DeliveryDate   string `json:"delivery_date"` // ISO 8601 format
-	Timezone       string `json:"timezone"`
-	DeliveryMethod string `json:"delivery_method"`
+	Title           string `json:"title"`
+	Content         string `json:"content"`
+	DeliveryDate    string `json:"delivery_date"` // ISO 8601 format
+	Timezone        string `json:"timezone"`
+	DeliveryMethod  string `json:"delivery_method"`
+	Recurrence      string `json:"recurrence"`
+	ReminderMinutes *int   `json:"reminder_minutes"`
 }
 
 // MessageResponse represents a message in API responses
 type MessageResponse struct {
-	ID             string `json:"id"`
-	UserID         string `json:"user_id"`
-	Title          string `json:"title"`
-	Content        string `json:"content"`
-	DeliveryDate   string `json:"delivery_date"`
-	Timezone       string `json:"timezone"`
-	Status         string `json:"status"`
-	DeliveryMethod string `json:"delivery_method"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+	ID              string               `json:"id"`
+	UserID          string               `json:"user_id"`
+	Title           string               `json:"title"`
+	Content         string               `json:"content"`
+	DeliveryDate    string               `json:"delivery_date"`
+	Timezone        string               `json:"timezone"`
+	Status          string               `json:"status"`
+	DeliveryMethod  string               `json:"delivery_method"`
+	Recurrence      string               `json:"recurrence"`
+	ReminderMinutes *int                 `json:"reminder_minutes,omitempty"`
+	AttachmentCount int                  `json:"attachment_count"`
+	Attachments     []AttachmentResponse `json:"attachments,omitempty"`
+	CreatedAt       string               `json:"created_at"`
+	UpdatedAt       string               `json:"updated_at"`
 }
 
 // CreateMessage creates a new message
@@ -85,6 +92,12 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		req.DeliveryMethod = "email"
 	}
 
+	recurrence := message.RecurrencePattern(req.Recurrence)
+	reminderOption := common.None[int]()
+	if req.ReminderMinutes != nil {
+		reminderOption = common.Some(*req.ReminderMinutes)
+	}
+
 	// Parse delivery method
 	var deliveryMethod message.DeliveryMethod
 	switch req.DeliveryMethod {
@@ -99,12 +112,14 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Create message in domain
 	createMsgReq := message.CreateMessageRequest{
-		UserID:         userID,
-		Title:          req.Title,
-		Content:        req.Content,
-		DeliveryDate:   deliveryDate,
-		Timezone:       req.Timezone,
-		DeliveryMethod: deliveryMethod,
+		UserID:          userID,
+		Title:           req.Title,
+		Content:         req.Content,
+		DeliveryDate:    deliveryDate,
+		Timezone:        req.Timezone,
+		DeliveryMethod:  deliveryMethod,
+		Recurrence:      recurrence,
+		ReminderMinutes: reminderOption,
 	}
 
 	msgResult := message.NewMessage(createMsgReq)
@@ -125,20 +140,25 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 
 	savedMsg := saveResult.Value()
 
-	response := MessageResponse{
-		ID:             savedMsg.ID().String(),
-		UserID:         savedMsg.UserID().String(),
-		Title:          savedMsg.Title(),
-		Content:        savedMsg.Content(),
-		DeliveryDate:   savedMsg.DeliveryDate().Format(time.RFC3339),
-		Timezone:       savedMsg.Timezone(),
-		Status:         string(savedMsg.Status()),
-		DeliveryMethod: string(savedMsg.DeliveryMethod()),
-		CreatedAt:      savedMsg.CreatedAt().Format(time.RFC3339),
-		UpdatedAt:      savedMsg.UpdatedAt().Format(time.RFC3339),
+	// Schedule the message for delivery using River Queue
+	messageService := h.app.MessageService()
+	if messageService != nil && messageService.Scheduling() != nil {
+		scheduleResult := messageService.Scheduling().ScheduleMessage(
+			r.Context(),
+			savedMsg.ID(),
+			savedMsg.DeliveryDate(),
+		)
+		if scheduleResult.IsErr() {
+			slog.Error("Failed to schedule message", "message_id", savedMsg.ID(), "error", scheduleResult.Error())
+			// Don't fail the request - message is saved, scheduling can be retried
+		} else {
+			slog.Info("Message scheduled successfully",
+				"message_id", savedMsg.ID(),
+				"scheduled_for", savedMsg.DeliveryDate())
+		}
 	}
 
-	respondWithJSON(w, http.StatusCreated, response)
+	respondWithJSON(w, http.StatusCreated, buildMessageResponse(savedMsg))
 }
 
 // GetMessages returns all messages for the current user
@@ -180,18 +200,7 @@ func (h *MessageHandler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	// Convert to response format
 	var response []MessageResponse
 	for _, msg := range messages {
-		response = append(response, MessageResponse{
-			ID:             msg.ID().String(),
-			UserID:         msg.UserID().String(),
-			Title:          msg.Title(),
-			Content:        msg.Content(),
-			DeliveryDate:   msg.DeliveryDate().Format(time.RFC3339),
-			Timezone:       msg.Timezone(),
-			Status:         string(msg.Status()),
-			DeliveryMethod: string(msg.DeliveryMethod()),
-			CreatedAt:      msg.CreatedAt().Format(time.RFC3339),
-			UpdatedAt:      msg.UpdatedAt().Format(time.RFC3339),
-		})
+		response = append(response, buildMessageResponse(msg))
 	}
 
 	if response == nil {
@@ -238,17 +247,15 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := MessageResponse{
-		ID:             msg.ID().String(),
-		UserID:         msg.UserID().String(),
-		Title:          msg.Title(),
-		Content:        msg.Content(),
-		DeliveryDate:   msg.DeliveryDate().Format(time.RFC3339),
-		Timezone:       msg.Timezone(),
-		Status:         string(msg.Status()),
-		DeliveryMethod: string(msg.DeliveryMethod()),
-		CreatedAt:      msg.CreatedAt().Format(time.RFC3339),
-		UpdatedAt:      msg.UpdatedAt().Format(time.RFC3339),
+	response := buildMessageResponse(msg)
+
+	attachmentsResult := h.app.Database().FindAttachmentsByMessageID(r.Context(), msg.ID())
+	if attachmentsResult.IsOk() {
+		attachments := attachmentsResult.Value()
+		response.AttachmentCount = len(attachments)
+		for _, att := range attachments {
+			response.Attachments = append(response.Attachments, attachmentToResponse(r.Context(), h.app, att))
+		}
 	}
 
 	respondWithJSON(w, http.StatusOK, response)
@@ -299,10 +306,12 @@ func (h *MessageHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Parse update request
 	var req struct {
-		Title        *string `json:"title"`
-		Content      *string `json:"content"`
-		DeliveryDate *string `json:"delivery_date"`
-		Timezone     *string `json:"timezone"`
+		Title           *string `json:"title"`
+		Content         *string `json:"content"`
+		DeliveryDate    *string `json:"delivery_date"`
+		Timezone        *string `json:"timezone"`
+		Recurrence      *string `json:"recurrence"`
+		ReminderMinutes *int    `json:"reminder_minutes"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -351,6 +360,31 @@ func (h *MessageHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
 		updatedMsg = updateResult.Value()
 	}
 
+	if req.Recurrence != nil {
+		updateResult := updatedMsg.WithRecurrence(message.RecurrencePattern(*req.Recurrence))
+		if updateResult.IsErr() {
+			respondWithError(w, http.StatusBadRequest, updateResult.Error().Error())
+			return
+		}
+		updatedMsg = updateResult.Value()
+	}
+
+	if req.ReminderMinutes != nil {
+		var reminderOption common.Option[int]
+		if *req.ReminderMinutes > 0 {
+			reminderOption = common.Some(*req.ReminderMinutes)
+		} else {
+			reminderOption = common.None[int]()
+		}
+
+		updateResult := updatedMsg.WithReminderMinutes(reminderOption)
+		if updateResult.IsErr() {
+			respondWithError(w, http.StatusBadRequest, updateResult.Error().Error())
+			return
+		}
+		updatedMsg = updateResult.Value()
+	}
+
 	// Save updated message
 	saveResult := h.app.Database().UpdateMessage(r.Context(), updatedMsg)
 	if saveResult.IsErr() {
@@ -360,20 +394,25 @@ func (h *MessageHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
 
 	savedMsg := saveResult.Value()
 
-	response := MessageResponse{
-		ID:             savedMsg.ID().String(),
-		UserID:         savedMsg.UserID().String(),
-		Title:          savedMsg.Title(),
-		Content:        savedMsg.Content(),
-		DeliveryDate:   savedMsg.DeliveryDate().Format(time.RFC3339),
-		Timezone:       savedMsg.Timezone(),
-		Status:         string(savedMsg.Status()),
-		DeliveryMethod: string(savedMsg.DeliveryMethod()),
-		CreatedAt:      savedMsg.CreatedAt().Format(time.RFC3339),
-		UpdatedAt:      savedMsg.UpdatedAt().Format(time.RFC3339),
+	// Reschedule the message if delivery date changed
+	messageService := h.app.MessageService()
+	if req.DeliveryDate != nil && messageService != nil && messageService.Scheduling() != nil {
+		rescheduleResult := messageService.Scheduling().RescheduleMessage(
+			r.Context(),
+			savedMsg.ID(),
+			savedMsg.DeliveryDate(),
+		)
+		if rescheduleResult.IsErr() {
+			slog.Error("Failed to reschedule message", "message_id", savedMsg.ID(), "error", rescheduleResult.Error())
+			// Don't fail the request - message is updated, rescheduling can be retried
+		} else {
+			slog.Info("Message rescheduled successfully",
+				"message_id", savedMsg.ID(),
+				"new_delivery_date", savedMsg.DeliveryDate())
+		}
 	}
 
-	respondWithJSON(w, http.StatusOK, response)
+	respondWithJSON(w, http.StatusOK, buildMessageResponse(savedMsg))
 }
 
 // DeleteMessage deletes a message
@@ -427,4 +466,28 @@ func (h *MessageHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondWithJSON(w, http.StatusOK, map[string]string{"message": "message deleted successfully"})
+}
+
+func buildMessageResponse(msg message.Message) MessageResponse {
+	response := MessageResponse{
+		ID:              msg.ID().String(),
+		UserID:          msg.UserID().String(),
+		Title:           msg.Title(),
+		Content:         msg.Content(),
+		DeliveryDate:    msg.DeliveryDate().Format(time.RFC3339),
+		Timezone:        msg.Timezone(),
+		Status:          string(msg.Status()),
+		DeliveryMethod:  string(msg.DeliveryMethod()),
+		Recurrence:      string(msg.Recurrence()),
+		AttachmentCount: 0,
+		CreatedAt:       msg.CreatedAt().Format(time.RFC3339),
+		UpdatedAt:       msg.UpdatedAt().Format(time.RFC3339),
+	}
+
+	if reminder := msg.ReminderMinutes(); reminder.IsSome() {
+		value := reminder.Value()
+		response.ReminderMinutes = &value
+	}
+
+	return response
 }

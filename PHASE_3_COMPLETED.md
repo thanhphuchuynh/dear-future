@@ -256,19 +256,13 @@ Benefits:
 
 ### 🚧 Known Limitations
 
-1. **Mock Database**: Backend uses in-memory mock database
-   - Messages don't persist between restarts
-   - User profiles return "not found" after registration
-   - **Fix**: Implement real PostgreSQL adapter
+1. **Mock Database (Development fallback)**: When no `DATABASE_URL` is configured the app still runs against the mock layer.
+   - Real PostgreSQL support is available out-of-the-box, but local development without a database will not persist messages.
+   - **Fix**: Provide a `.env` with `DATABASE_URL` to always run against Postgres.
 
-2. **No File Uploads**: Message attachments not yet implemented
-   - **Fix**: Add file input + Cloudflare R2 integration
-
-3. **No Email Delivery**: Scheduled messages won't actually send
-   - **Fix**: Add background job scheduler + SMTP integration
-
-4. **Basic Validation**: Client-side only
-   - **Fix**: Add server-side validation and better error messages
+2. **Basic Validation**: Client-side heavy
+   - The frontend enforces most constraints (title/content length, attachment size) before submission.
+   - **Next**: Add richer server-side validation responses for even better UX.
 
 ## Documentation Created
 
@@ -287,38 +281,25 @@ Benefits:
 
 ### Immediate Priorities
 
-1. **Database Persistence**
-   - Implement full PostgreSQL adapter
-   - Replace mock database
-   - Migrate existing functionality
-
-2. **User Profile Management**
+1. **User Profile Management**
    - Profile settings page
    - Update name, email, timezone
    - Change password functionality
 
-3. **Message Attachments**
-   - File upload UI
-   - Cloudflare R2 integration
-   - Image preview in messages
+2. **Server-Side Validation**
+   - Mirror client validation rules on the API
+   - Surface field-level errors in responses
+
+3. **Mobile Experience**
+   - Begin responsive QA across a wider range of devices
+   - Explore a lightweight PWA shell for quick compose/edit flows
 
 ### Future Enhancements
 
-4. **Email Delivery System**
-   - Background job scheduler
-   - SMTP integration with templates
-   - Delivery status tracking
-
-5. **Advanced Features**
-   - Recurring messages
-   - Message templates
+4. **Advanced Features**
+   - Rich message templates & personalization
    - Recipient groups (send to others)
-   - Analytics dashboard
-
-6. **Mobile Experience**
-   - Progressive Web App (PWA)
-   - Push notifications
-   - Offline support
+   - Push notifications & webhooks
 
 7. **Testing**
    - Unit tests (Jest + React Testing Library)
